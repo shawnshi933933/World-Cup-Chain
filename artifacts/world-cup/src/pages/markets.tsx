@@ -9,8 +9,15 @@ import { useLocation } from "wouter";
 
 export default function Markets() {
   const [search, setSearch] = useState("");
-  const { data: markets, isLoading, refetch } = useGetMarkets({ search });
+  const [forceRefresh, setForceRefresh] = useState(false);
+  const { data: markets, isLoading, refetch } = useGetMarkets({ search, refresh: forceRefresh || undefined });
   const [, setLocation] = useLocation();
+
+  const handleRefresh = async () => {
+    setForceRefresh(true);
+    await refetch();
+    setForceRefresh(false);
+  };
 
   const handleCreateParlay = (marketId: string) => {
     setLocation(`/parlays/new?market=${marketId}`);
@@ -34,7 +41,7 @@ export default function Markets() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="outline" size="icon" onClick={() => refetch()} title="刷新">
+          <Button variant="outline" size="icon" onClick={handleRefresh} title="强制刷新 Polymarket 数据">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
         </div>
