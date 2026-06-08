@@ -1,3 +1,4 @@
+import { createHmac } from "crypto";
 import { logger } from "./logger";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
@@ -26,15 +27,18 @@ function priceToOdds(price: number): number {
   return Math.round((1 / price) * 100) / 100;
 }
 
-function isSoccerMarket(question: string, events: any[]): boolean {
+function isWorldCupMarket(question: string): boolean {
   const q = question.toLowerCase();
-  const keywords = [
-    "world cup", "fifa", "copa", "soccer", "football",
-    "mls", "premier league", "champions league", "bundesliga",
-    "la liga", "serie a", "ligue 1", "concacaf", "uefa",
-    "euro 2026", "euro cup", "nations league",
+  const worldCupKeywords = [
+    "world cup",
+    "fifa",
+    "copa mundial",
+    "world cup 2026",
+    "2026 world cup",
+    "concacaf",
+    "wc 2026",
   ];
-  return keywords.some(kw => q.includes(kw));
+  return worldCupKeywords.some(kw => q.includes(kw));
 }
 
 function parseMarket(m: any): PolymarketMarket | null {
@@ -78,7 +82,6 @@ function parseMarket(m: any): PolymarketMarket | null {
 
 export async function fetchWorldCupMarkets(search?: string): Promise<PolymarketMarket[]> {
   try {
-    // Fetch a larger batch and filter by soccer keywords
     const params = new URLSearchParams({
       limit: "200",
       active: "true",
@@ -104,19 +107,18 @@ export async function fetchWorldCupMarkets(search?: string): Promise<PolymarketM
 
     for (const m of data) {
       const question: string = m.question || "";
-      if (!isSoccerMarket(question, m.events || [])) continue;
+      if (!isWorldCupMarket(question)) continue;
 
       const market = parseMarket(m);
       if (market) markets.push(market);
     }
 
-    // Apply search filter if provided
     if (search) {
       const q = search.toLowerCase();
       return markets.filter(m => m.title.toLowerCase().includes(q));
     }
 
-    logger.info({ count: markets.length }, "Fetched football markets from Polymarket");
+    logger.info({ count: markets.length }, "Fetched World Cup markets from Polymarket");
     return markets;
   } catch (err) {
     logger.error({ err }, "Failed to fetch Polymarket markets");
@@ -145,13 +147,35 @@ export async function checkMarketResolution(conditionId: string): Promise<{ reso
     if (!market) return { resolved: false, winningOutcomes: [] };
     if (!market.resolved) return { resolved: false, winningOutcomes: [] };
 
-    // In a resolved market, winning outcome has price ~1.0
     const winning = market.outcomes.filter(o => o.price >= 0.95).map(o => o.name);
     return { resolved: true, winningOutcomes: winning };
   } catch (err) {
     logger.error({ err }, "Failed to check market resolution");
     return { resolved: false, winningOutcomes: [] };
   }
+}
+
+/**
+ * Build the HMAC-SHA256 signature for Polymarket L2 CLOB authentication.
+ * Polymarket signs: timestamp + method + path + body (concatenated), keyed with base64url-decoded secret.
+ */
+function buildPolymarketSignature(params: {
+  secret: string;
+  timestamp: string;
+  method: string;
+  path: string;
+  body: string;
+}): string {
+  const message = params.timestamp + params.method + params.path + params.body;
+  // Polymarket uses the raw base64-decoded secret as the HMAC key
+  let keyBuf: Buffer;
+  try {
+    keyBuf = Buffer.from(params.secret, "base64");
+  } catch {
+    // If secret isn't valid base64, use it as UTF-8 bytes
+    keyBuf = Buffer.from(params.secret, "utf8");
+  }
+  return createHmac("sha256", keyBuf).update(message).digest("base64");
 }
 
 export async function placePolymarketOrder(params: {
@@ -170,11 +194,25 @@ export async function placePolymarketOrder(params: {
   try {
     logger.info({ tokenId: params.tokenId, amount: params.amount }, "Placing Polymarket order");
 
-    // Polymarket CLOB API — L2 authentication uses HMAC headers
-    // The L2 credential set requires: apiKey, secret (for HMAC signing), passphrase, and wallet address.
-    // Full signing implementation would use the py-clob-client pattern; this sends the required headers.
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    const method = "POST";
+    const path = "/order";
+    const bodyObj = {
+      orderType: "FOK",
+      tokenID: params.tokenId,
+      side: "BUY",
+      size: params.amount.toFixed(2),
+      price: "0",
+    };
+    const body = JSON.stringify(bodyObj);
+
+    const signature = buildPolymarketSignature({
+      secret: params.secret,
+      timestamp,
+      method,
+      path,
+      body,
+    });
 
     const res = await fetch("https://clob.polymarket.com/order", {
       method: "POST",
@@ -183,17 +221,10 @@ export async function placePolymarketOrder(params: {
         "POLY_ADDRESS": params.walletAddress,
         "POLY_API_KEY": params.apiKey,
         "POLY_PASSPHRASE": params.passphrase,
-        "POLY_SIGNATURE": params.secret, // placeholder — full HMAC signing requires crypto lib
+        "POLY_SIGNATURE": signature,
         "POLY_TIMESTAMP": timestamp,
-        "POLY_NONCE": nonce,
       },
-      body: JSON.stringify({
-        orderType: "FOK",
-        tokenID: params.tokenId,
-        side: "BUY",
-        size: params.amount.toFixed(2),
-        price: "0",
-      }),
+      body,
       signal: AbortSignal.timeout(15000),
     });
 

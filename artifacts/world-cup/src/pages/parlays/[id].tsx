@@ -22,8 +22,8 @@ export default function ParlayDetail() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: parlay, isLoading } = useGetParlay(id, { 
-    query: { enabled: !!id } 
+  const { data: parlay, isLoading } = useGetParlay(id, {
+    query: { queryKey: getGetParlayQueryKey(id), enabled: !!id }
   });
   
   const startParlay = useStartParlay();
