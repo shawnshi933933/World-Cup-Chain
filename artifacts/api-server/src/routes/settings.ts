@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, settingsTable } from "@workspace/db";
 import { UpdateSettingsBody } from "@workspace/api-zod";
+import { envCredentialsConfigured } from "../lib/credentials";
 
 const router: IRouter = Router();
 
@@ -12,15 +13,21 @@ async function getOrCreateSettings() {
 }
 
 function formatSettings(s: any) {
+  const envCreds = envCredentialsConfigured();
   return {
     simulationMode: s.simulationMode,
-    hasApiKey: !!s.polymarketApiKey,
-    hasSecret: !!s.polymarketSecret,
-    hasPassphrase: !!s.polymarketPassphrase,
-    polymarketApiKey: s.polymarketApiKey
-      ? `****${s.polymarketApiKey.slice(-4)}`
-      : null,
-    walletAddress: s.walletAddress ?? null,
+    hasApiKey: envCreds || !!s.polymarketApiKey,
+    hasSecret: envCreds || !!s.polymarketSecret,
+    hasPassphrase: envCreds || !!s.polymarketPassphrase,
+    credentialsFromEnv: envCreds,
+    polymarketApiKey: envCreds
+      ? "env:POLYMARKET_API_KEY"
+      : s.polymarketApiKey
+        ? `****${s.polymarketApiKey.slice(-4)}`
+        : null,
+    walletAddress: envCreds
+      ? process.env.POLYMARKET_WALLET ?? null
+      : s.walletAddress ?? null,
   };
 }
 
@@ -48,17 +55,20 @@ router.put("/settings", async (req, res): Promise<void> => {
     if (parsed.data.simulationMode !== undefined) {
       updates.simulationMode = parsed.data.simulationMode;
     }
-    if (parsed.data.polymarketApiKey !== undefined) {
-      updates.polymarketApiKey = parsed.data.polymarketApiKey;
-    }
-    if (parsed.data.polymarketSecret !== undefined) {
-      updates.polymarketSecret = parsed.data.polymarketSecret;
-    }
-    if (parsed.data.polymarketPassphrase !== undefined) {
-      updates.polymarketPassphrase = parsed.data.polymarketPassphrase;
-    }
-    if (parsed.data.walletAddress !== undefined) {
-      updates.walletAddress = parsed.data.walletAddress;
+    // Only update DB credentials when env vars are not set (env vars take precedence)
+    if (!envCredentialsConfigured()) {
+      if (parsed.data.polymarketApiKey !== undefined) {
+        updates.polymarketApiKey = parsed.data.polymarketApiKey;
+      }
+      if (parsed.data.polymarketSecret !== undefined) {
+        updates.polymarketSecret = parsed.data.polymarketSecret;
+      }
+      if (parsed.data.polymarketPassphrase !== undefined) {
+        updates.polymarketPassphrase = parsed.data.polymarketPassphrase;
+      }
+      if (parsed.data.walletAddress !== undefined) {
+        updates.walletAddress = parsed.data.walletAddress;
+      }
     }
 
     const { eq } = await import("drizzle-orm");
