@@ -14,4 +14,5 @@ export const ParlayStatus = {
   active: 'active',
   won: 'won',
   lost: 'lost',
+  error: 'error',
 } as const;

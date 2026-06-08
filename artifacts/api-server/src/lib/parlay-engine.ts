@@ -3,6 +3,9 @@ import { db, parlaysTable, parlayLegsTable, settingsTable } from "@workspace/db"
 import { checkMarketResolution, placePolymarketOrder } from "./polymarket";
 import { logger } from "./logger";
 
+// Polygon (Polymarket's chain) gas fees are minimal; deduct a small fixed amount per leg in real mode.
+const GAS_FEE_USDC = 0.01;
+
 type SelectedOutcome = {
   name: string;
   tokenId: string;
@@ -46,7 +49,6 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
 
   const currentLegIndex = parlay.currentLegIndex;
   if (currentLegIndex >= legs.length) {
-    // All legs done — parlay won
     await db.update(parlaysTable)
       .set({ status: "won", updatedAt: new Date() })
       .where(eq(parlaysTable.id, parlayId));
@@ -56,43 +58,48 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
 
   const leg = legs[currentLegIndex];
   if (leg.status === "active") {
-    // Already active, don't re-start
     return;
   }
 
   const stakeAmount = parseFloat(parlay.currentAmount as string);
 
   if (parlay.simulationMode) {
-    // Simulation mode: just mark the leg as active with the stake amount
     await db.update(parlayLegsTable)
       .set({ status: "active", stakeAmount: stakeAmount.toString(), updatedAt: new Date() })
       .where(eq(parlayLegsTable.id, leg.id));
   } else {
-    // Real mode: place order on Polymarket
+    // Real mode: validate full L2 credentials
     const [settings] = await db.select().from(settingsTable).limit(1);
-    if (!settings?.polymarketApiKey || !settings?.walletAddress) {
-      logger.error({ parlayId }, "No Polymarket API key or wallet address configured");
-      return;
-    }
-
-    const outcomes = leg.selectedOutcomes as SelectedOutcome[];
-    // Pick the outcome with best odds (highest potential return)
-    const bestOutcome = outcomes.reduce((best, o) => o.odds > best.odds ? o : best, outcomes[0]);
-
-    if (!settings.polymarketSecret || !settings.polymarketPassphrase) {
-      logger.error({ parlayId }, "Polymarket L2 credentials incomplete (need apiKey, secret, passphrase)");
-      await db.update(parlayLegsTable)
-        .set({ status: "pending", updatedAt: new Date() })
-        .where(eq(parlayLegsTable.id, leg.id));
+    if (!settings?.polymarketApiKey || !settings?.polymarketSecret || !settings?.polymarketPassphrase || !settings?.walletAddress) {
+      logger.error({ parlayId }, "Polymarket L2 credentials incomplete (need apiKey, secret, passphrase, walletAddress)");
       await db.update(parlaysTable)
         .set({ status: "error", updatedAt: new Date() })
         .where(eq(parlaysTable.id, parlayId));
       return;
     }
 
+    const outcomes = leg.selectedOutcomes as SelectedOutcome[];
+
+    // Real mode: in a parlay, we bet on one outcome per leg.
+    // If the user selected multiple outcomes for coverage, we choose the one with the highest odds
+    // (highest potential return) as the single real-money bet. Settlement will check all selected outcomes.
+    const betOutcome = outcomes.reduce((best, o) => o.odds > best.odds ? o : best, outcomes[0]);
+
+    // Net stake after deducting gas fee
+    const netStake = Math.max(stakeAmount - GAS_FEE_USDC, 0);
+    if (netStake <= 0) {
+      logger.error({ parlayId, stakeAmount }, "Stake too small after gas deduction");
+      await db.update(parlaysTable)
+        .set({ status: "error", updatedAt: new Date() })
+        .where(eq(parlaysTable.id, parlayId));
+      return;
+    }
+
+    // Limit GTC order: size = tokens to buy = netStake / price; price = current market price
     const orderResult = await placePolymarketOrder({
-      tokenId: bestOutcome.tokenId,
-      amount: stakeAmount,
+      tokenId: betOutcome.tokenId,
+      price: betOutcome.price,
+      sizeUsdc: netStake,
       apiKey: settings.polymarketApiKey,
       secret: settings.polymarketSecret,
       passphrase: settings.polymarketPassphrase,
@@ -100,10 +107,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     });
 
     if (!orderResult) {
-      logger.error({ parlayId, legOrder: leg.legOrder }, "Order placement failed — marking leg as errored");
-      await db.update(parlayLegsTable)
-        .set({ status: "pending", updatedAt: new Date() })
-        .where(eq(parlayLegsTable.id, leg.id));
+      logger.error({ parlayId, legOrder: leg.legOrder }, "Order placement failed — marking parlay as errored");
       await db.update(parlaysTable)
         .set({ status: "error", updatedAt: new Date() })
         .where(eq(parlaysTable.id, parlayId));
@@ -113,7 +117,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     await db.update(parlayLegsTable)
       .set({
         status: "active",
-        stakeAmount: stakeAmount.toString(),
+        stakeAmount: netStake.toString(),
         polymarketOrderId: orderResult.orderId,
         updatedAt: new Date(),
       })
@@ -136,131 +140,72 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   if (legs.length === 0) return;
   const leg = legs[0];
 
-  if (parlay.simulationMode) {
-    // Simulation: check market resolution via Polymarket API
-    const resolution = await checkMarketResolution(leg.marketId);
-    if (!resolution.resolved) return;
+  // Resolution logic is the same for simulation and real mode:
+  // The leg is won if ANY of the selected outcomes matches the market winner.
+  const resolution = await checkMarketResolution(leg.marketId);
+  if (!resolution.resolved) return;
 
-    const outcomes = leg.selectedOutcomes as SelectedOutcome[];
-    const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
+  const outcomes = leg.selectedOutcomes as SelectedOutcome[];
+  const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
 
-    // Check if any of selected outcomes won
-    const wonOutcome = outcomes.find(o => winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w)));
+  const wonOutcome = outcomes.find(o =>
+    winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w))
+  );
 
-    const updatedOutcomes = outcomes.map(o => ({
-      ...o,
-      won: wonOutcome ? o.name === wonOutcome.name : false,
-    }));
+  const updatedOutcomes = outcomes.map(o => ({
+    ...o,
+    won: wonOutcome ? o.name === wonOutcome.name : false,
+  }));
 
-    if (!wonOutcome) {
-      // Lost this leg — parlay fails
-      await db.update(parlayLegsTable)
-        .set({ status: "lost", selectedOutcomes: updatedOutcomes, settledAt: new Date(), updatedAt: new Date() })
-        .where(eq(parlayLegsTable.id, leg.id));
-
-      await db.update(parlaysTable)
-        .set({ status: "lost", currentAmount: "0", updatedAt: new Date() })
-        .where(eq(parlaysTable.id, parlayId));
-
-      logger.info({ parlayId, legOrder: leg.legOrder }, "Leg lost — parlay failed");
-      return;
-    }
-
-    // Won — calculate payout
-    const stakeAmount = parseFloat(leg.stakeAmount as string);
-    const payout = stakeAmount * wonOutcome.odds;
-    const roundedPayout = Math.round(payout * 1000000) / 1000000;
-
+  if (!wonOutcome) {
     await db.update(parlayLegsTable)
-      .set({
-        status: "won",
-        payoutAmount: roundedPayout.toString(),
-        selectedOutcomes: updatedOutcomes,
-        settledAt: new Date(),
-        updatedAt: new Date(),
-      })
+      .set({ status: "lost", selectedOutcomes: updatedOutcomes, settledAt: new Date(), updatedAt: new Date() })
       .where(eq(parlayLegsTable.id, leg.id));
-
-    // Update parlay current amount and advance leg index
-    const nextLegIndex = parlay.currentLegIndex + 1;
-    const allLegs = await db.select().from(parlayLegsTable)
-      .where(eq(parlayLegsTable.parlayId, parlayId))
-      .orderBy(parlayLegsTable.legOrder);
-
-    const isLastLeg = nextLegIndex >= allLegs.length;
-
     await db.update(parlaysTable)
-      .set({
-        currentAmount: roundedPayout.toString(),
-        currentLegIndex: nextLegIndex,
-        status: isLastLeg ? "won" : "active",
-        updatedAt: new Date(),
-      })
+      .set({ status: "lost", currentAmount: "0", updatedAt: new Date() })
       .where(eq(parlaysTable.id, parlayId));
+    logger.info({ parlayId, legOrder: leg.legOrder }, "Leg lost — parlay failed");
+    return;
+  }
 
-    logger.info({ parlayId, legOrder: leg.legOrder, payout: roundedPayout }, "Leg won");
+  // Payout = stake * odds of winning outcome
+  const stakeAmount = parseFloat(leg.stakeAmount as string);
+  const rawPayout = stakeAmount * wonOutcome.odds;
 
-    if (!isLastLeg) {
-      await executeNextLeg(parlayId);
-    }
-  } else {
-    // Real mode: check market resolution
-    const resolution = await checkMarketResolution(leg.marketId);
-    if (!resolution.resolved) return;
+  // Deduct gas fee before rolling proceeds to next leg (real mode only; simulation keeps full payout)
+  const payout = parlay.simulationMode
+    ? Math.round(rawPayout * 1_000_000) / 1_000_000
+    : Math.round(Math.max(rawPayout - GAS_FEE_USDC, 0) * 1_000_000) / 1_000_000;
 
-    const outcomes = leg.selectedOutcomes as SelectedOutcome[];
-    const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
-    const wonOutcome = outcomes.find(o => winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w)));
+  await db.update(parlayLegsTable)
+    .set({
+      status: "won",
+      payoutAmount: payout.toString(),
+      selectedOutcomes: updatedOutcomes,
+      settledAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(parlayLegsTable.id, leg.id));
 
-    const updatedOutcomes = outcomes.map(o => ({
-      ...o,
-      won: wonOutcome ? o.name === wonOutcome.name : false,
-    }));
+  const nextLegIndex = parlay.currentLegIndex + 1;
+  const allLegs = await db.select().from(parlayLegsTable)
+    .where(eq(parlayLegsTable.parlayId, parlayId))
+    .orderBy(parlayLegsTable.legOrder);
+  const isLastLeg = nextLegIndex >= allLegs.length;
 
-    if (!wonOutcome) {
-      await db.update(parlayLegsTable)
-        .set({ status: "lost", selectedOutcomes: updatedOutcomes, settledAt: new Date(), updatedAt: new Date() })
-        .where(eq(parlayLegsTable.id, leg.id));
+  await db.update(parlaysTable)
+    .set({
+      currentAmount: payout.toString(),
+      currentLegIndex: nextLegIndex,
+      status: isLastLeg ? "won" : "active",
+      updatedAt: new Date(),
+    })
+    .where(eq(parlaysTable.id, parlayId));
 
-      await db.update(parlaysTable)
-        .set({ status: "lost", currentAmount: "0", updatedAt: new Date() })
-        .where(eq(parlaysTable.id, parlayId));
-      return;
-    }
+  logger.info({ parlayId, legOrder: leg.legOrder, payout, simulationMode: parlay.simulationMode }, "Leg won");
 
-    const stakeAmount = parseFloat(leg.stakeAmount as string);
-    const payout = stakeAmount * wonOutcome.odds;
-    const roundedPayout = Math.round(payout * 1000000) / 1000000;
-
-    await db.update(parlayLegsTable)
-      .set({
-        status: "won",
-        payoutAmount: roundedPayout.toString(),
-        selectedOutcomes: updatedOutcomes,
-        settledAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(parlayLegsTable.id, leg.id));
-
-    const nextLegIndex = parlay.currentLegIndex + 1;
-    const allLegs = await db.select().from(parlayLegsTable)
-      .where(eq(parlayLegsTable.parlayId, parlayId))
-      .orderBy(parlayLegsTable.legOrder);
-
-    const isLastLeg = nextLegIndex >= allLegs.length;
-
-    await db.update(parlaysTable)
-      .set({
-        currentAmount: roundedPayout.toString(),
-        currentLegIndex: nextLegIndex,
-        status: isLastLeg ? "won" : "active",
-        updatedAt: new Date(),
-      })
-      .where(eq(parlaysTable.id, parlayId));
-
-    if (!isLastLeg) {
-      await executeNextLeg(parlayId);
-    }
+  if (!isLastLeg) {
+    await executeNextLeg(parlayId);
   }
 }
 

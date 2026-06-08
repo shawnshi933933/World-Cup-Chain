@@ -295,7 +295,7 @@ components:
           description: Current amount after each leg settles
         status:
           type: string
-          enum: [draft, active, won, lost]
+          enum: [draft, active, won, lost, error]
         simulationMode:
           type: boolean
           description: If true, no real money is used

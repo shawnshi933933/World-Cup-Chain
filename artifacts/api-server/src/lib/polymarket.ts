@@ -180,7 +180,10 @@ function buildPolymarketSignature(params: {
 
 export async function placePolymarketOrder(params: {
   tokenId: string;
-  amount: number;
+  /** Market price per share (0-1). Used to calculate token quantity from USDC amount. */
+  price: number;
+  /** Stake in USDC after gas deduction */
+  sizeUsdc: number;
   apiKey: string | null | undefined;
   secret: string | null | undefined;
   passphrase: string | null | undefined;
@@ -190,19 +193,26 @@ export async function placePolymarketOrder(params: {
     logger.error("placePolymarketOrder called with incomplete credentials");
     return null;
   }
+  if (params.price <= 0 || params.price >= 1) {
+    logger.error({ price: params.price }, "Invalid market price for order");
+    return null;
+  }
 
   try {
-    logger.info({ tokenId: params.tokenId, amount: params.amount }, "Placing Polymarket order");
+    // Number of outcome tokens to buy = USDC amount / price per token
+    const tokenSize = params.sizeUsdc / params.price;
+
+    logger.info({ tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, tokenSize, price: params.price }, "Placing Polymarket order");
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const method = "POST";
     const path = "/order";
     const bodyObj = {
-      orderType: "FOK",
+      orderType: "GTC",       // Good Till Cancelled limit order at market price
       tokenID: params.tokenId,
       side: "BUY",
-      size: params.amount.toFixed(2),
-      price: "0",
+      size: tokenSize.toFixed(4),     // token quantity
+      price: params.price.toFixed(4), // price per share (e.g. "0.1615")
     };
     const body = JSON.stringify(bodyObj);
 
