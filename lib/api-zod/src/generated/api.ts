@@ -238,7 +238,9 @@ export const GetSettingsResponse = zod.object({
   "simulationMode": zod.boolean(),
   "polymarketApiKey": zod.string().nullish().describe('Masked API key (last 4 chars only)'),
   "walletAddress": zod.string().nullish(),
-  "hasApiKey": zod.boolean()
+  "hasApiKey": zod.boolean(),
+  "hasSecret": zod.boolean(),
+  "hasPassphrase": zod.boolean()
 })
 
 
@@ -248,6 +250,8 @@ export const GetSettingsResponse = zod.object({
 export const UpdateSettingsBody = zod.object({
   "simulationMode": zod.boolean().optional(),
   "polymarketApiKey": zod.string().nullish(),
+  "polymarketSecret": zod.string().nullish().describe('Polymarket L2 API secret for HMAC signing'),
+  "polymarketPassphrase": zod.string().nullish().describe('Polymarket L2 API passphrase'),
   "walletAddress": zod.string().nullish()
 })
 
@@ -255,7 +259,9 @@ export const UpdateSettingsResponse = zod.object({
   "simulationMode": zod.boolean(),
   "polymarketApiKey": zod.string().nullish().describe('Masked API key (last 4 chars only)'),
   "walletAddress": zod.string().nullish(),
-  "hasApiKey": zod.boolean()
+  "hasApiKey": zod.boolean(),
+  "hasSecret": zod.boolean(),
+  "hasPassphrase": zod.boolean()
 })
 
 

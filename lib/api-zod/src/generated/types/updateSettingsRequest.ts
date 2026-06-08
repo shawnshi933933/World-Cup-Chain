@@ -9,5 +9,9 @@
 export interface UpdateSettingsRequest {
   simulationMode?: boolean;
   polymarketApiKey?: string | null;
+  /** Polymarket L2 API secret for HMAC signing */
+  polymarketSecret?: string | null;
+  /** Polymarket L2 API passphrase */
+  polymarketPassphrase?: string | null;
   walletAddress?: string | null;
 }

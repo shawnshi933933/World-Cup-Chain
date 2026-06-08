@@ -492,9 +492,15 @@ components:
           nullable: true
         hasApiKey:
           type: boolean
+        hasSecret:
+          type: boolean
+        hasPassphrase:
+          type: boolean
       required:
         - simulationMode
         - hasApiKey
+        - hasSecret
+        - hasPassphrase
 
     UpdateSettingsRequest:
       type: object
@@ -504,6 +510,14 @@ components:
         polymarketApiKey:
           type: string
           nullable: true
+        polymarketSecret:
+          type: string
+          nullable: true
+          description: Polymarket L2 API secret for HMAC signing
+        polymarketPassphrase:
+          type: string
+          nullable: true
+          description: Polymarket L2 API passphrase
         walletAddress:
           type: string
           nullable: true

@@ -12,4 +12,6 @@ export interface Settings {
   polymarketApiKey?: string | null;
   walletAddress?: string | null;
   hasApiKey: boolean;
+  hasSecret: boolean;
+  hasPassphrase: boolean;
 }

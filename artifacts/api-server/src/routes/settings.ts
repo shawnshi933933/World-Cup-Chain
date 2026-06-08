@@ -15,6 +15,8 @@ function formatSettings(s: any) {
   return {
     simulationMode: s.simulationMode,
     hasApiKey: !!s.polymarketApiKey,
+    hasSecret: !!s.polymarketSecret,
+    hasPassphrase: !!s.polymarketPassphrase,
     polymarketApiKey: s.polymarketApiKey
       ? `****${s.polymarketApiKey.slice(-4)}`
       : null,
@@ -48,6 +50,12 @@ router.put("/settings", async (req, res): Promise<void> => {
     }
     if (parsed.data.polymarketApiKey !== undefined) {
       updates.polymarketApiKey = parsed.data.polymarketApiKey;
+    }
+    if (parsed.data.polymarketSecret !== undefined) {
+      updates.polymarketSecret = parsed.data.polymarketSecret;
+    }
+    if (parsed.data.polymarketPassphrase !== undefined) {
+      updates.polymarketPassphrase = parsed.data.polymarketPassphrase;
     }
     if (parsed.data.walletAddress !== undefined) {
       updates.walletAddress = parsed.data.walletAddress;

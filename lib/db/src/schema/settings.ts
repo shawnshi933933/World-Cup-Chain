@@ -5,7 +5,9 @@ import { z } from "zod/v4";
 export const settingsTable = pgTable("settings", {
   id: serial("id").primaryKey(),
   simulationMode: boolean("simulation_mode").notNull().default(true),
-  polymarketApiKey: text("polymarket_api_key"), // encrypted/stored securely
+  polymarketApiKey: text("polymarket_api_key"),
+  polymarketSecret: text("polymarket_secret"),
+  polymarketPassphrase: text("polymarket_passphrase"),
   walletAddress: text("wallet_address"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

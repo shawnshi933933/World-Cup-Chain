@@ -10,12 +10,14 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Shield, Key, Wallet, Save, Activity } from "lucide-react";
+import { Shield, Key, Wallet, Save, Activity, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const settingsSchema = z.object({
   simulationMode: z.boolean().default(true),
   polymarketApiKey: z.string().optional(),
+  polymarketSecret: z.string().optional(),
+  polymarketPassphrase: z.string().optional(),
   walletAddress: z.string().optional()
 });
 
@@ -31,6 +33,8 @@ export default function SettingsPage() {
     defaultValues: {
       simulationMode: true,
       polymarketApiKey: "",
+      polymarketSecret: "",
+      polymarketPassphrase: "",
       walletAddress: ""
     }
   });
@@ -39,17 +43,24 @@ export default function SettingsPage() {
     if (settings) {
       form.reset({
         simulationMode: settings.simulationMode,
-        polymarketApiKey: settings.hasApiKey ? "********" + (settings.polymarketApiKey || "") : "",
+        polymarketApiKey: settings.hasApiKey ? "••••••••" : "",
+        polymarketSecret: settings.hasSecret ? "••••••••" : "",
+        polymarketPassphrase: settings.hasPassphrase ? "••••••••" : "",
         walletAddress: settings.walletAddress || ""
       });
     }
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
-    // Don't send masked API key back to server
-    const payload = { ...data };
-    if (payload.polymarketApiKey?.startsWith("********")) {
-      delete payload.polymarketApiKey;
+    const payload: SettingsFormValues = { simulationMode: data.simulationMode, walletAddress: data.walletAddress };
+    if (data.polymarketApiKey && !data.polymarketApiKey.startsWith("••••")) {
+      payload.polymarketApiKey = data.polymarketApiKey;
+    }
+    if (data.polymarketSecret && !data.polymarketSecret.startsWith("••••")) {
+      payload.polymarketSecret = data.polymarketSecret;
+    }
+    if (data.polymarketPassphrase && !data.polymarketPassphrase.startsWith("••••")) {
+      payload.polymarketPassphrase = data.polymarketPassphrase;
     }
 
     updateSettings.mutate({ data: payload }, {
@@ -80,7 +91,7 @@ export default function SettingsPage() {
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-          
+
           <Card className="border-border/50 bg-card/50 overflow-hidden">
             <div className={`h-2 ${form.watch('simulationMode') ? 'bg-primary' : 'bg-destructive'}`}></div>
             <CardHeader>
@@ -101,8 +112,8 @@ export default function SettingsPage() {
                     <div className="space-y-0.5">
                       <FormLabel className="text-base font-bold">模拟模式</FormLabel>
                       <FormDescription>
-                        {field.value 
-                          ? "当前: 安全。不会扣除真实资金，所有操作均为模拟。" 
+                        {field.value
+                          ? "当前: 安全。不会扣除真实资金，所有操作均为模拟。"
                           : "当前: 危险！关闭此选项将使用真实 USDC 在 Polymarket 下单。"}
                       </FormDescription>
                     </div>
@@ -123,10 +134,10 @@ export default function SettingsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Shield className="w-5 h-5 text-primary" />
-                Polymarket 凭证
+                Polymarket L2 凭证
               </CardTitle>
               <CardDescription>
-                仅在关闭模拟模式时需要。您的 API 密钥将被加密存储。
+                仅在关闭模拟模式时需要。真实模式需要完整的 L2 API 凭证（API Key、Secret、Passphrase）。所有凭证将被安全存储。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -140,13 +151,69 @@ export default function SettingsPage() {
                       API Key
                     </FormLabel>
                     <FormControl>
-                      <Input 
-                        placeholder="输入您的 Polymarket API 密钥" 
-                        type="password" 
-                        {...field} 
+                      <Input
+                        placeholder="输入您的 Polymarket API Key"
+                        type="password"
+                        autoComplete="off"
+                        {...field}
                         className="font-mono bg-background"
                       />
                     </FormControl>
+                    {settings?.hasApiKey && (
+                      <FormDescription className="text-green-500">✓ 已配置</FormDescription>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="polymarketSecret"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <Lock className="w-4 h-4 text-muted-foreground" />
+                      API Secret
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="输入您的 Polymarket API Secret"
+                        type="password"
+                        autoComplete="off"
+                        {...field}
+                        className="font-mono bg-background"
+                      />
+                    </FormControl>
+                    {settings?.hasSecret && (
+                      <FormDescription className="text-green-500">✓ 已配置</FormDescription>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="polymarketPassphrase"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <Lock className="w-4 h-4 text-muted-foreground" />
+                      API Passphrase
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="输入您的 Polymarket API Passphrase"
+                        type="password"
+                        autoComplete="off"
+                        {...field}
+                        className="font-mono bg-background"
+                      />
+                    </FormControl>
+                    {settings?.hasPassphrase && (
+                      <FormDescription className="text-green-500">✓ 已配置</FormDescription>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -162,9 +229,10 @@ export default function SettingsPage() {
                       钱包地址
                     </FormLabel>
                     <FormControl>
-                      <Input 
-                        placeholder="0x..." 
-                        {...field} 
+                      <Input
+                        placeholder="0x..."
+                        autoComplete="off"
+                        {...field}
                         className="font-mono bg-background"
                       />
                     </FormControl>

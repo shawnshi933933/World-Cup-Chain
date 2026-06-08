@@ -79,18 +79,42 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     // Pick the outcome with best odds (highest potential return)
     const bestOutcome = outcomes.reduce((best, o) => o.odds > best.odds ? o : best, outcomes[0]);
 
+    if (!settings.polymarketSecret || !settings.polymarketPassphrase) {
+      logger.error({ parlayId }, "Polymarket L2 credentials incomplete (need apiKey, secret, passphrase)");
+      await db.update(parlayLegsTable)
+        .set({ status: "pending", updatedAt: new Date() })
+        .where(eq(parlayLegsTable.id, leg.id));
+      await db.update(parlaysTable)
+        .set({ status: "error", updatedAt: new Date() })
+        .where(eq(parlaysTable.id, parlayId));
+      return;
+    }
+
     const orderResult = await placePolymarketOrder({
       tokenId: bestOutcome.tokenId,
       amount: stakeAmount,
       apiKey: settings.polymarketApiKey,
+      secret: settings.polymarketSecret,
+      passphrase: settings.polymarketPassphrase,
       walletAddress: settings.walletAddress,
     });
+
+    if (!orderResult) {
+      logger.error({ parlayId, legOrder: leg.legOrder }, "Order placement failed — marking leg as errored");
+      await db.update(parlayLegsTable)
+        .set({ status: "pending", updatedAt: new Date() })
+        .where(eq(parlayLegsTable.id, leg.id));
+      await db.update(parlaysTable)
+        .set({ status: "error", updatedAt: new Date() })
+        .where(eq(parlaysTable.id, parlayId));
+      return;
+    }
 
     await db.update(parlayLegsTable)
       .set({
         status: "active",
         stakeAmount: stakeAmount.toString(),
-        polymarketOrderId: orderResult?.orderId ?? null,
+        polymarketOrderId: orderResult.orderId,
         updatedAt: new Date(),
       })
       .where(eq(parlayLegsTable.id, leg.id));

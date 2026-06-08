@@ -2,7 +2,6 @@ import { useState, useMemo } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useGetMarkets, useCreateParlay, useGetSettings, SelectedOutcome } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient } from "@/main"; // Need to ensure queryClient is accessible or use useQueryClient
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetParlaysQueryKey, getGetParlayStatsQueryKey } from "@workspace/api-client-react";
 
