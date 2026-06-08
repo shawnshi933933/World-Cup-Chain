@@ -1,22 +1,27 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: 炜新联手征战世界杯 — 串关投注 API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: markets
+    description: Polymarket world cup markets
+  - name: parlays
+    description: Parlay (串关) management
+  - name: settings
+    description: App settings
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +29,191 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /markets:
+    get:
+      operationId: getMarkets
+      tags: [markets]
+      summary: Get world cup markets from Polymarket
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search term to filter markets
+        - name: refresh
+          in: query
+          schema:
+            type: boolean
+          description: Force refresh from Polymarket API
+      responses:
+        "200":
+          description: List of markets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Market"
+
+  /markets/{marketId}:
+    get:
+      operationId: getMarket
+      tags: [markets]
+      summary: Get a single market by ID
+      parameters:
+        - name: marketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Market details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Market"
+        "404":
+          description: Market not found
+
+  /parlays:
+    get:
+      operationId: getParlays
+      tags: [parlays]
+      summary: Get all parlays
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, won, lost, all]
+          description: Filter by status
+      responses:
+        "200":
+          description: List of parlays
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Parlay"
+    post:
+      operationId: createParlay
+      tags: [parlays]
+      summary: Create a new parlay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateParlayRequest"
+      responses:
+        "201":
+          description: Created parlay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Parlay"
+
+  /parlays/stats:
+    get:
+      operationId: getParlayStats
+      tags: [parlays]
+      summary: Get overall parlay statistics
+      responses:
+        "200":
+          description: Aggregated stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParlayStats"
+
+  /parlays/{parlayId}:
+    get:
+      operationId: getParlay
+      tags: [parlays]
+      summary: Get a single parlay with all legs
+      parameters:
+        - name: parlayId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Parlay with legs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParlayWithLegs"
+        "404":
+          description: Parlay not found
+    delete:
+      operationId: deleteParlay
+      tags: [parlays]
+      summary: Delete a parlay (only if not yet started)
+      parameters:
+        - name: parlayId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          description: Cannot delete an active parlay
+
+  /parlays/{parlayId}/start:
+    post:
+      operationId: startParlay
+      tags: [parlays]
+      summary: Start executing a parlay (place first leg bet)
+      parameters:
+        - name: parlayId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Parlay started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParlayWithLegs"
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get app settings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update app settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsRequest"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +224,286 @@ components:
       required:
         - status
 
+    Market:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Polymarket condition ID
+        slug:
+          type: string
+        title:
+          type: string
+          description: Match title (e.g. "Brazil vs Argentina")
+        category:
+          type: string
+        endDate:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+        closed:
+          type: boolean
+        resolved:
+          type: boolean
+        outcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketOutcome"
+        cachedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - outcomes
+        - active
+        - closed
+        - resolved
+
+    MarketOutcome:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Outcome name (e.g. "Brazil", "Draw", "Argentina")
+        price:
+          type: number
+          description: Price as probability 0-1 (e.g. 0.65 = 65%)
+        odds:
+          type: number
+          description: "Payout odds in '1 pays X' format (e.g. 1.54 = win 0.54 per 1 invested)"
+        tokenId:
+          type: string
+      required:
+        - name
+        - price
+        - odds
+
+    Parlay:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        initialAmount:
+          type: number
+          description: Initial stake in USDC
+        currentAmount:
+          type: number
+          description: Current amount after each leg settles
+        status:
+          type: string
+          enum: [draft, active, won, lost]
+        simulationMode:
+          type: boolean
+          description: If true, no real money is used
+        totalOdds:
+          type: number
+          description: Combined multiplier across all legs (best case)
+        totalOddsWorstCase:
+          type: number
+          description: Combined multiplier across all legs (worst case, when 2 outcomes selected)
+        potentialPayout:
+          type: number
+          description: Max potential final amount
+        currentLegIndex:
+          type: integer
+          description: Which leg is currently active (0-indexed)
+        totalLegs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - initialAmount
+        - currentAmount
+        - status
+        - simulationMode
+        - totalOdds
+        - potentialPayout
+        - currentLegIndex
+        - totalLegs
+        - createdAt
+        - updatedAt
+
+    ParlayWithLegs:
+      allOf:
+        - $ref: "#/components/schemas/Parlay"
+        - type: object
+          properties:
+            legs:
+              type: array
+              items:
+                $ref: "#/components/schemas/ParlayLeg"
+          required:
+            - legs
+
+    ParlayLeg:
+      type: object
+      properties:
+        id:
+          type: integer
+        parlayId:
+          type: integer
+        legOrder:
+          type: integer
+          description: 0-indexed order in the parlay chain
+        marketId:
+          type: string
+        marketTitle:
+          type: string
+        selectedOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SelectedOutcome"
+          description: 1 or 2 selected outcomes for this leg
+        stakeAmount:
+          type: number
+          description: Amount actually staked on this leg
+        payoutAmount:
+          type: number
+          nullable: true
+          description: Actual payout received (null if not settled)
+        status:
+          type: string
+          enum: [pending, active, won, lost]
+        settledAt:
+          type: string
+          format: date-time
+          nullable: true
+        polymarketOrderId:
+          type: string
+          nullable: true
+          description: Order ID on Polymarket (null in simulation mode)
+      required:
+        - id
+        - parlayId
+        - legOrder
+        - marketId
+        - marketTitle
+        - selectedOutcomes
+        - status
+
+    SelectedOutcome:
+      type: object
+      properties:
+        name:
+          type: string
+        tokenId:
+          type: string
+        odds:
+          type: number
+          description: Odds snapshot at time of parlay creation
+        price:
+          type: number
+          description: Price snapshot (0-1)
+        won:
+          type: boolean
+          nullable: true
+          description: null until settled
+      required:
+        - name
+        - tokenId
+        - odds
+        - price
+
+    ParlayStats:
+      type: object
+      properties:
+        totalParlays:
+          type: integer
+        activeParlays:
+          type: integer
+        wonParlays:
+          type: integer
+        lostParlays:
+          type: integer
+        totalStaked:
+          type: number
+        totalPayout:
+          type: number
+        netProfit:
+          type: number
+      required:
+        - totalParlays
+        - activeParlays
+        - wonParlays
+        - lostParlays
+        - totalStaked
+        - totalPayout
+        - netProfit
+
+    CreateParlayRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        initialAmount:
+          type: number
+        simulationMode:
+          type: boolean
+        legs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateLegRequest"
+          minItems: 1
+      required:
+        - name
+        - initialAmount
+        - simulationMode
+        - legs
+
+    CreateLegRequest:
+      type: object
+      properties:
+        marketId:
+          type: string
+        marketTitle:
+          type: string
+        selectedOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SelectedOutcome"
+          minItems: 1
+          maxItems: 2
+      required:
+        - marketId
+        - marketTitle
+        - selectedOutcomes
+
+    Settings:
+      type: object
+      properties:
+        simulationMode:
+          type: boolean
+        polymarketApiKey:
+          type: string
+          nullable: true
+          description: Masked API key (last 4 chars only)
+        walletAddress:
+          type: string
+          nullable: true
+        hasApiKey:
+          type: boolean
+      required:
+        - simulationMode
+        - hasApiKey
+
+    UpdateSettingsRequest:
+      type: object
+      properties:
+        simulationMode:
+          type: boolean
+        polymarketApiKey:
+          type: string
+          nullable: true
+        walletAddress:
+          type: string
+          nullable: true
