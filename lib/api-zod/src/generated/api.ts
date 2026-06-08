@@ -115,7 +115,8 @@ export const CreateParlayBody = zod.object({
   "tokenId": zod.string(),
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
-  "won": zod.boolean().nullish().describe('null until settled')
+  "won": zod.boolean().nullish().describe('null until settled'),
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
 })).min(1).max(createParlayBodyLegsItemSelectedOutcomesMax)
 })).min(1)
 })
@@ -168,7 +169,8 @@ export const GetParlayResponse = zod.object({
   "tokenId": zod.string(),
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
-  "won": zod.boolean().nullish().describe('null until settled')
+  "won": zod.boolean().nullish().describe('null until settled'),
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
 })).describe('1 or 2 selected outcomes for this leg'),
   "stakeAmount": zod.number().optional().describe('Amount actually staked on this leg'),
   "payoutAmount": zod.number().nullish().describe('Actual payout received (null if not settled)'),
@@ -220,7 +222,8 @@ export const StartParlayResponse = zod.object({
   "tokenId": zod.string(),
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
-  "won": zod.boolean().nullish().describe('null until settled')
+  "won": zod.boolean().nullish().describe('null until settled'),
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
 })).describe('1 or 2 selected outcomes for this leg'),
   "stakeAmount": zod.number().optional().describe('Amount actually staked on this leg'),
   "payoutAmount": zod.number().nullish().describe('Actual payout received (null if not settled)'),

@@ -77,6 +77,8 @@ export interface SelectedOutcome {
   price: number;
   /** null until settled */
   won?: boolean | null;
+  /** Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. */
+  ratio?: number | null;
 }
 
 export type ParlayLegStatus = typeof ParlayLegStatus[keyof typeof ParlayLegStatus];

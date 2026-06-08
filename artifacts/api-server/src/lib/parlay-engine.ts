@@ -13,12 +13,9 @@ type SelectedOutcome = {
   odds: number;
   price: number;
   won: boolean | null;
+  /** Percentage of leg stake allocated to this outcome (0-100). Defaults to 100 for single-outcome legs. */
+  ratio?: number;
 };
-
-/** Pick the single outcome to actually bet on in real mode — the one with the highest odds. */
-function pickBetOutcome(outcomes: SelectedOutcome[]): SelectedOutcome {
-  return outcomes.reduce((best, o) => o.odds > best.odds ? o : best, outcomes[0]);
-}
 
 export async function startParlayExecution(parlayId: number): Promise<void> {
   const [parlay] = await db.select().from(parlaysTable).where(eq(parlaysTable.id, parlayId));
@@ -75,7 +72,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     // Real mode: resolve credentials (env vars take precedence over DB)
     const creds = await resolvePolymarketCredentials();
     if (!creds) {
-      logger.error({ parlayId }, "Polymarket L2 credentials not configured (set POLYMARKET_API_KEY, POLYMARKET_SECRET, POLYMARKET_PASSPHRASE, POLYMARKET_WALLET or use Settings page)");
+      logger.error({ parlayId }, "Polymarket L2 credentials not configured");
       await db.update(parlaysTable)
         .set({ status: "error", updatedAt: new Date() })
         .where(eq(parlaysTable.id, parlayId));
@@ -83,10 +80,6 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     }
 
     const outcomes = leg.selectedOutcomes as SelectedOutcome[];
-    // Real mode: one order per leg. When the user selected 2 outcomes for coverage,
-    // we bet on the highest-odds outcome. The SAME rule is applied in settlement so
-    // payout is only granted if THIS specific outcome wins — no phantom wins.
-    const betOutcome = pickBetOutcome(outcomes);
 
     // Net stake after deducting gas fee
     const netStake = Math.max(stakeAmount - GAS_FEE_USDC, 0);
@@ -98,33 +91,62 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
       return;
     }
 
-    // GTC limit order: buy `netStake / price` outcome tokens at market price
-    const orderResult = await placePolymarketOrder({
-      tokenId: betOutcome.tokenId,
-      price: betOutcome.price,
-      sizeUsdc: netStake,
-      ...creds,
-    });
+    const hasSplit = outcomes.length === 2 && outcomes.every(o => o.ratio !== undefined && o.ratio !== null);
 
-    if (!orderResult) {
-      logger.error({ parlayId, legOrder: leg.legOrder }, "Order placement failed — marking parlay as errored");
-      await db.update(parlaysTable)
-        .set({ status: "error", updatedAt: new Date() })
-        .where(eq(parlaysTable.id, parlayId));
-      return;
+    let orderId: string | undefined;
+
+    if (hasSplit) {
+      // Split stake: place two separate CLOB orders proportionally
+      const [o1, o2] = outcomes;
+      const stake1 = netStake * (o1.ratio! / 100);
+      const stake2 = netStake * (o2.ratio! / 100);
+
+      logger.info({ parlayId, stake1, stake2, ratio1: o1.ratio, ratio2: o2.ratio }, "Placing split orders");
+
+      const [r1, r2] = await Promise.all([
+        placePolymarketOrder({ tokenId: o1.tokenId, price: o1.price, sizeUsdc: stake1, ...creds }),
+        placePolymarketOrder({ tokenId: o2.tokenId, price: o2.price, sizeUsdc: stake2, ...creds }),
+      ]);
+
+      if (!r1 || !r2) {
+        logger.error({ parlayId, legOrder: leg.legOrder }, "One or both split orders failed — marking parlay as errored");
+        await db.update(parlaysTable)
+          .set({ status: "error", updatedAt: new Date() })
+          .where(eq(parlaysTable.id, parlayId));
+        return;
+      }
+
+      orderId = `${r1.orderId}|${r2.orderId}`;
+    } else {
+      // Single outcome (ratio defaults to 100): bet full stake
+      const betOutcome = outcomes[0];
+      const r = await placePolymarketOrder({
+        tokenId: betOutcome.tokenId,
+        price: betOutcome.price,
+        sizeUsdc: netStake,
+        ...creds,
+      });
+
+      if (!r) {
+        logger.error({ parlayId, legOrder: leg.legOrder }, "Order placement failed — marking parlay as errored");
+        await db.update(parlaysTable)
+          .set({ status: "error", updatedAt: new Date() })
+          .where(eq(parlaysTable.id, parlayId));
+        return;
+      }
+
+      orderId = r.orderId;
     }
 
     await db.update(parlayLegsTable)
       .set({
         status: "active",
         stakeAmount: netStake.toString(),
-        polymarketOrderId: orderResult.orderId,
+        polymarketOrderId: orderId,
         updatedAt: new Date(),
       })
       .where(eq(parlayLegsTable.id, leg.id));
   }
-
-  logger.info({ parlayId, legOrder: leg.legOrder }, "Leg activated");
 }
 
 export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
@@ -146,22 +168,10 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   const outcomes = leg.selectedOutcomes as SelectedOutcome[];
   const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
 
-  let wonOutcome: SelectedOutcome | undefined;
-
-  if (parlay.simulationMode) {
-    // Simulation: leg won if ANY selected outcome wins (user selected 1-2 outcomes as coverage)
-    wonOutcome = outcomes.find(o =>
-      winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w))
-    );
-  } else {
-    // Real mode: only the ONE outcome that was actually bet on counts.
-    // We use the same pickBetOutcome rule as order placement to identify which outcome was bet.
-    const betOutcome = pickBetOutcome(outcomes);
-    const betOutcomeWon = winningOutcomeNames.some(
-      w => w.includes(betOutcome.name.toLowerCase()) || betOutcome.name.toLowerCase().includes(w)
-    );
-    wonOutcome = betOutcomeWon ? betOutcome : undefined;
-  }
+  // Find which selected outcome(s) won
+  const wonOutcome: SelectedOutcome | undefined = outcomes.find(o =>
+    winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w))
+  );
 
   const updatedOutcomes = outcomes.map(o => ({
     ...o,
@@ -180,7 +190,11 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   }
 
   const stakeAmount = parseFloat(leg.stakeAmount as string);
-  const rawPayout = stakeAmount * wonOutcome.odds;
+
+  // Payout = stake × (ratio / 100) × odds
+  // ratio defaults to 100 for single-outcome legs
+  const ratio = (wonOutcome.ratio ?? 100) / 100;
+  const rawPayout = stakeAmount * ratio * wonOutcome.odds;
 
   // Deduct gas fee before rolling proceeds to next leg (real mode only)
   const payout = parlay.simulationMode
@@ -212,7 +226,7 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
     })
     .where(eq(parlaysTable.id, parlayId));
 
-  logger.info({ parlayId, legOrder: leg.legOrder, payout, simulationMode: parlay.simulationMode }, "Leg won");
+  logger.info({ parlayId, legOrder: leg.legOrder, payout, ratio, simulationMode: parlay.simulationMode }, "Leg won");
 
   if (!isLastLeg) {
     await executeNextLeg(parlayId);
