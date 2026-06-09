@@ -110,14 +110,10 @@ export default function WalletSetupPage() {
         },
       };
 
-      console.log("[poly-auth] typedData", JSON.stringify(typedData, null, 2));
-
       const signature = await window.ethereum!.request({
         method: "eth_signTypedData_v4",
         params: [walletAddress, JSON.stringify(typedData)],
       }) as string;
-
-      console.log("[poly-auth] signature", signature);
 
       // Send to our backend: it checksums the address (ethers.getAddress) and
       // proxies to Polymarket ensuring POLY_ADDRESS is EIP-55 checksummed.

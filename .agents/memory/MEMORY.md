@@ -1,0 +1,1 @@
+- [Polymarket CLOB API geo-block](polymarket-geo-block.md) — CLOB API 从中国大陆 IP（包括 Replit 服务器）被 Cloudflare 封锁，统一返回 "Invalid L1 Request headers"，与签名方式无关。

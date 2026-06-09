@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Shield, Key, Wallet, Save, Activity, Lock, Trash2, FlaskConical } from "lucide-react";
+import { Shield, Key, Wallet, Save, Activity, Lock, Trash2, FlaskConical, Terminal, Copy, CheckCheck } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const settingsSchema = z.object({
@@ -28,11 +28,48 @@ type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+const GET_KEY_SCRIPT = `pip install py-clob-client
+python3 - <<'PY'
+from py_clob_client.client import ClobClient
+from py_clob_client.clob_types import ApiCreds
+
+# 替换成你的私钥（Polygon 钱包）
+PRIVATE_KEY = "0x你的私钥"
+CHAIN_ID    = 137   # Polygon mainnet
+
+client = ClobClient("https://clob.polymarket.com", key=PRIVATE_KEY, chain_id=CHAIN_ID)
+creds  = client.create_or_derive_api_creds()
+
+print("apiKey     :", creds.api_key)
+print("secret     :", creds.api_secret)
+print("passphrase :", creds.api_passphrase)
+PY`;
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [text]);
+  return (
+    <button
+      onClick={copy}
+      className="absolute top-2 right-2 p-1.5 rounded bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground transition-colors"
+      title="复制"
+    >
+      {copied ? <CheckCheck className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [deleting, setDeleting] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const { data: settings, isLoading } = useGetSettings();
   const updateSettings = useUpdateSettings();
 
@@ -167,21 +204,42 @@ export default function SettingsPage() {
                     Polymarket L2 凭证
                   </CardTitle>
                   <CardDescription className="mt-1.5">
-                    仅在关闭模拟模式时需要。真实模式需要完整的 L2 API 凭证。所有凭证将被安全存储。
+                    仅在关闭模拟模式时需要。在下方直接粘贴凭证，或点击"如何获取"查看步骤。
                   </CardDescription>
                 </div>
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="shrink-0 border-yellow-400/50 text-yellow-400 hover:bg-yellow-400/10"
-                  onClick={() => navigate("/wallet-setup")}
+                  className="shrink-0 border border-dashed border-muted-foreground/40 text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                  onClick={() => setShowGuide(v => !v)}
                 >
-                  <Wallet className="w-4 h-4 mr-1.5" />
-                  钱包授权
+                  <Terminal className="w-4 h-4 mr-1.5" />
+                  {showGuide ? "收起" : "如何获取"}
                 </Button>
               </div>
             </CardHeader>
+
+            {showGuide && (
+              <div className="mx-6 mb-4 rounded-lg border border-yellow-400/20 bg-yellow-400/5 p-4 space-y-3 text-sm">
+                <p className="font-semibold text-yellow-300 flex items-center gap-1.5">
+                  <Terminal className="w-4 h-4" /> 用本地终端获取 Polymarket API 凭证
+                </p>
+                <ol className="space-y-2 text-muted-foreground list-decimal list-inside">
+                  <li>开启 VPN（连接美国节点）</li>
+                  <li>确保已安装 Python 3，打开终端运行下面的脚本</li>
+                  <li>把输出的 <code className="text-foreground bg-muted px-1 rounded text-xs">apiKey / secret / passphrase</code> 粘贴到下方输入框</li>
+                </ol>
+                <div className="relative">
+                  <pre className="rounded bg-muted p-3 text-xs font-mono overflow-x-auto pr-10 text-foreground/80 whitespace-pre-wrap">{GET_KEY_SCRIPT}</pre>
+                  <CopyButton text={GET_KEY_SCRIPT} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  ⚠️ 私钥只在你本地运行，不会传到任何服务器。脚本用完即丢。
+                </p>
+              </div>
+            )}
+
             <CardContent className="space-y-4">
               <FormField
                 control={form.control}
