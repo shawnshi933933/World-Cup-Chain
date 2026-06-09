@@ -78,9 +78,41 @@ export default function WalletSetupPage() {
     setLoading(true);
     try {
       const timestamp = Math.floor(Date.now() / 1000).toString();
+      const nonce = 0;
+
+      // Polymarket uses EIP-712 typed data signing (not personal_sign).
+      // See: github.com/Polymarket/clob-client src/signing/eip712.ts
+      const typedData = {
+        domain: {
+          name: "ClobAuthDomain",
+          version: "1",
+          chainId: 137, // Polygon mainnet
+        },
+        types: {
+          EIP712Domain: [
+            { name: "name",    type: "string"  },
+            { name: "version", type: "string"  },
+            { name: "chainId", type: "uint256" },
+          ],
+          ClobAuth: [
+            { name: "address",   type: "address" },
+            { name: "timestamp", type: "string"  },
+            { name: "nonce",     type: "uint256" },
+            { name: "message",   type: "string"  },
+          ],
+        },
+        primaryType: "ClobAuth",
+        message: {
+          address:   walletAddress,
+          timestamp: timestamp,
+          nonce:     nonce,
+          message:   "This message attests that I control the given wallet",
+        },
+      };
+
       const signature = await window.ethereum!.request({
-        method: "personal_sign",
-        params: [timestamp, walletAddress],
+        method: "eth_signTypedData_v4",
+        params: [walletAddress, JSON.stringify(typedData)],
       }) as string;
 
       // Call Polymarket CLOB directly from the browser (CORS: allow-origin: *).
@@ -92,7 +124,7 @@ export default function WalletSetupPage() {
           "POLY_ADDRESS":   walletAddress,
           "POLY_SIGNATURE": sigStripped,
           "POLY_TIMESTAMP": timestamp,
-          "POLY_NONCE":     "0",
+          "POLY_NONCE":     String(nonce),
         },
       });
       const polyBody = await polyRes.json() as { apiKey?: string; secret?: string; passphrase?: string; error?: string };
