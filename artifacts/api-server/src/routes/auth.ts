@@ -40,21 +40,27 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
   }
 
   try {
-    // Derive POLY_NONCE from the signature's recovery byte (v).
-    // MetaMask personal_sign returns 0x + 130 hex chars (65 bytes: r, s, v).
-    // Polymarket expects nonce = v - 27 (→ 0 or 1).
-    let nonce = 0;
-    try {
-      const sigHex = signature.replace(/^0x/, "");
-      const v = parseInt(sigHex.slice(-2), 16);
-      nonce = v >= 27 ? v - 27 : v;
-    } catch { /* leave nonce = 0 */ }
+    // Official Polymarket TS clob-client always sends nonce=0 for derive-key.
+    // Python client sends recovery_id (v-27); we match TS client here.
+    const nonce = 0;
+
+    // Python client sends signature WITHOUT 0x prefix; TS client WITH.
+    // Try without first (matches py-clob-client behaviour).
+    const sigStripped = signature.replace(/^0x/, "");
+
+    req.log.info({
+      walletAddress,
+      timestamp: String(timestamp),
+      sigLength: sigStripped.length,
+      sigPrefix: sigStripped.slice(0, 8),
+      nonce,
+    }, "Forwarding to Polymarket /auth/api-key");
 
     const polyRes = await fetch(`${CLOB_HOST}/auth/api-key`, {
       method: "POST",
       headers: {
         "POLY_ADDRESS":   walletAddress,
-        "POLY_SIGNATURE": signature,
+        "POLY_SIGNATURE": sigStripped,
         "POLY_TIMESTAMP": String(timestamp),
         "POLY_NONCE":     String(nonce),
       },
@@ -63,7 +69,7 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
     const body = await polyRes.json() as Record<string, unknown>;
 
     if (!polyRes.ok) {
-      req.log.warn({ status: polyRes.status, body }, "Polymarket auth/api-key error");
+      req.log.warn({ status: polyRes.status, body, walletAddress, sigLength: sigStripped.length }, "Polymarket auth/api-key error");
       res.status(polyRes.status).json({ error: body?.error ?? "Polymarket request failed", detail: body });
       return;
     }
