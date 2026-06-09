@@ -119,34 +119,14 @@ export default function WalletSetupPage() {
 
       console.log("[poly-auth] signature", signature);
 
-      // Call Polymarket CLOB directly from the browser (CORS: allow-origin: *).
-      // Server-side proxying is blocked by Cloudflare bot detection.
-      const sigStripped = signature.replace(/^0x/, "");
-      const reqHeaders = {
-        "POLY_ADDRESS":   walletAddress,
-        "POLY_SIGNATURE": sigStripped,
-        "POLY_TIMESTAMP": timestamp,
-        "POLY_NONCE":     String(nonce),
-      };
-      console.log("[poly-auth] request headers", reqHeaders);
-
-      const polyRes = await fetch("https://clob.polymarket.com/auth/api-key", {
-        method: "POST",
-        headers: reqHeaders,
-      });
-      const polyBodyText = await polyRes.text();
-      console.log("[poly-auth] response status", polyRes.status, "body", polyBodyText);
-      const polyBody = JSON.parse(polyBodyText) as { apiKey?: string; secret?: string; passphrase?: string; error?: string };
-      if (!polyRes.ok) throw new Error(`${polyBody.error ?? polyRes.status} (raw: ${polyBodyText})`);
-      if (!polyBody.apiKey || !polyBody.secret || !polyBody.passphrase) {
-        throw new Error(`Polymarket 返回了意外的数据格式: ${polyBodyText}`);
-      }
-      const data: Creds = {
-        apiKey: polyBody.apiKey,
-        secret: polyBody.secret,
-        passphrase: polyBody.passphrase,
+      // Send to our backend: it checksums the address (ethers.getAddress) and
+      // proxies to Polymarket ensuring POLY_ADDRESS is EIP-55 checksummed.
+      const data = await apiPost("/api/auth/poly-create-key", {
         walletAddress,
-      };
+        signature,
+        timestamp,
+        nonce,
+      }) as Creds;
       setCreds(data);
       setStep("save");
     } catch (e: unknown) {

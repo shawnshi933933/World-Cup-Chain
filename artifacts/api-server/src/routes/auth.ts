@@ -32,8 +32,20 @@ router.get("/auth/check", (_req, res): void => {
 
 const CLOB_HOST = "https://clob.polymarket.com";
 
-router.post("/auth/derive-key", async (req, res): Promise<void> => {
-  const { walletAddress, signature, timestamp } = req.body ?? {};
+const EIP712_DOMAIN = { name: "ClobAuthDomain", version: "1", chainId: 137 };
+const EIP712_TYPES  = {
+  ClobAuth: [
+    { name: "address",   type: "address" },
+    { name: "timestamp", type: "string"  },
+    { name: "nonce",     type: "uint256" },
+    { name: "message",   type: "string"  },
+  ],
+};
+const POLY_MSG = "This message attests that I control the given wallet";
+
+// Frontend sends the EIP-712 signature; backend checksums the address and proxies to Polymarket.
+router.post("/auth/poly-create-key", async (req, res): Promise<void> => {
+  const { walletAddress, signature, timestamp, nonce = 0 } = req.body ?? {};
 
   if (!walletAddress || !signature || !timestamp) {
     res.status(400).json({ error: "Missing walletAddress, signature, or timestamp" });
@@ -41,60 +53,44 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
   }
 
   try {
-    // --- Local verification so we can confirm our signature is correct ---
-    let recoveredAddress = "(error)";
-    let localVerifyOk = false;
+    const checksummedAddress = ethers.getAddress(walletAddress);
+
+    const typedDataValue = {
+      address:   checksummedAddress,
+      timestamp: String(timestamp),
+      nonce:     Number(nonce),
+      message:   POLY_MSG,
+    };
+
+    let recovered = "(error)";
+    let sigOk = false;
     try {
-      recoveredAddress = ethers.verifyMessage(String(timestamp), signature);
-      localVerifyOk = recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
+      recovered = ethers.verifyTypedData(EIP712_DOMAIN, EIP712_TYPES, typedDataValue, signature);
+      sigOk = recovered.toLowerCase() === walletAddress.toLowerCase();
     } catch (e) {
-      req.log.warn({ err: e }, "Local ethers.verifyMessage threw");
+      req.log.warn({ err: e }, "verifyTypedData threw");
     }
 
-    // Recovery id from the last byte of the signature (v - 27)
-    const sigHex = signature.replace(/^0x/, "");
-    const v = parseInt(sigHex.slice(-2), 16);
-    const nonce = v >= 27 ? v - 27 : v;
-    // Strip 0x to match py-clob-client format
-    const sigStripped = sigHex;
+    const sigStripped = signature.replace(/^0x/, "");
 
     req.log.info({
-      walletAddress,
-      recoveredAddress,
-      localVerifyOk,
-      timestamp: String(timestamp),
-      sigLength: sigStripped.length,
-      nonce,
-    }, "Forwarding to Polymarket /auth/api-key");
-
-    // If local verify failed, the signing account differs from the connected account.
-    // Use the recovered (actual signer) address for POLY_ADDRESS so Polymarket can verify.
-    const effectiveAddress = localVerifyOk ? walletAddress : recoveredAddress;
-
-    if (!localVerifyOk) {
-      req.log.warn(
-        { walletAddress, recoveredAddress, effectiveAddress },
-        "Signing account differs from connected account – using recovered address for Polymarket"
-      );
-    }
+      walletAddress, checksummedAddress, recovered, sigOk, timestamp, nonce,
+    }, "→ Polymarket /auth/api-key");
 
     const polyRes = await fetch(`${CLOB_HOST}/auth/api-key`, {
       method: "POST",
       headers: {
-        "POLY_ADDRESS":   effectiveAddress,
+        "POLY_ADDRESS":   checksummedAddress,
         "POLY_SIGNATURE": sigStripped,
         "POLY_TIMESTAMP": String(timestamp),
-        "POLY_NONCE":     "0",
-        "Origin":         "https://polymarket.com",
-        "Referer":        "https://polymarket.com/",
-        "Content-Type":   "application/json",
+        "POLY_NONCE":     String(nonce),
       },
     });
 
     const body = await polyRes.json() as Record<string, unknown>;
+    req.log.info({ status: polyRes.status, body }, "← Polymarket response");
 
     if (!polyRes.ok) {
-      req.log.warn({ status: polyRes.status, body, walletAddress, sigLength: sigStripped.length }, "Polymarket auth/api-key error");
       res.status(polyRes.status).json({ error: body?.error ?? "Polymarket request failed", detail: body });
       return;
     }
@@ -104,12 +100,11 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
     const passphrase = body.passphrase as string | undefined;
 
     if (!apiKey || !secret || !passphrase) {
-      req.log.warn({ body }, "Unexpected response shape from Polymarket");
       res.status(502).json({ error: "Unexpected response from Polymarket", raw: body });
       return;
     }
 
-    res.json({ apiKey, secret, passphrase, walletAddress: effectiveAddress });
+    res.json({ apiKey, secret, passphrase, walletAddress: checksummedAddress });
   } catch (err) {
     req.log.error({ err }, "Failed to proxy auth/api-key");
     res.status(502).json({ error: "Failed to reach Polymarket CLOB API" });
