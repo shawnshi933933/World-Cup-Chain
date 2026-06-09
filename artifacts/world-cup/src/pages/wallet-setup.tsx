@@ -110,27 +110,36 @@ export default function WalletSetupPage() {
         },
       };
 
+      console.log("[poly-auth] typedData", JSON.stringify(typedData, null, 2));
+
       const signature = await window.ethereum!.request({
         method: "eth_signTypedData_v4",
         params: [walletAddress, JSON.stringify(typedData)],
       }) as string;
 
+      console.log("[poly-auth] signature", signature);
+
       // Call Polymarket CLOB directly from the browser (CORS: allow-origin: *).
       // Server-side proxying is blocked by Cloudflare bot detection.
       const sigStripped = signature.replace(/^0x/, "");
+      const reqHeaders = {
+        "POLY_ADDRESS":   walletAddress,
+        "POLY_SIGNATURE": sigStripped,
+        "POLY_TIMESTAMP": timestamp,
+        "POLY_NONCE":     String(nonce),
+      };
+      console.log("[poly-auth] request headers", reqHeaders);
+
       const polyRes = await fetch("https://clob.polymarket.com/auth/api-key", {
         method: "POST",
-        headers: {
-          "POLY_ADDRESS":   walletAddress,
-          "POLY_SIGNATURE": sigStripped,
-          "POLY_TIMESTAMP": timestamp,
-          "POLY_NONCE":     String(nonce),
-        },
+        headers: reqHeaders,
       });
-      const polyBody = await polyRes.json() as { apiKey?: string; secret?: string; passphrase?: string; error?: string };
-      if (!polyRes.ok) throw new Error(polyBody.error ?? `Polymarket error ${polyRes.status}`);
+      const polyBodyText = await polyRes.text();
+      console.log("[poly-auth] response status", polyRes.status, "body", polyBodyText);
+      const polyBody = JSON.parse(polyBodyText) as { apiKey?: string; secret?: string; passphrase?: string; error?: string };
+      if (!polyRes.ok) throw new Error(`${polyBody.error ?? polyRes.status} (raw: ${polyBodyText})`);
       if (!polyBody.apiKey || !polyBody.secret || !polyBody.passphrase) {
-        throw new Error("Polymarket 返回了意外的数据格式");
+        throw new Error(`Polymarket 返回了意外的数据格式: ${polyBodyText}`);
       }
       const data: Creds = {
         apiKey: polyBody.apiKey,
