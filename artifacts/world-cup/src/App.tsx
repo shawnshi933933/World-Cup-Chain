@@ -11,6 +11,7 @@ import ParlaysIndex from "@/pages/parlays/index";
 import ParlayNew from "@/pages/parlays/new";
 import ParlayDetail from "@/pages/parlays/[id]";
 import Settings from "@/pages/settings";
+import WalletSetup from "@/pages/wallet-setup";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ function Router() {
         <Route path="/parlays/new" component={ParlayNew} />
         <Route path="/parlays/:id" component={ParlayDetail} />
         <Route path="/settings" component={Settings} />
+        <Route path="/wallet-setup" component={WalletSetup} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

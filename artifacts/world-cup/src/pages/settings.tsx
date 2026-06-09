@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { useLocation } from "wouter";
 import { useGetSettings, useUpdateSettings } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -25,6 +26,7 @@ type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function SettingsPage() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const { data: settings, isLoading } = useGetSettings();
   const updateSettings = useUpdateSettings();
 
@@ -132,13 +134,27 @@ export default function SettingsPage() {
 
           <Card className="border-border/50 bg-card/50">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="w-5 h-5 text-primary" />
-                Polymarket L2 凭证
-              </CardTitle>
-              <CardDescription>
-                仅在关闭模拟模式时需要。真实模式需要完整的 L2 API 凭证（API Key、Secret、Passphrase）。所有凭证将被安全存储。
-              </CardDescription>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-primary" />
+                    Polymarket L2 凭证
+                  </CardTitle>
+                  <CardDescription className="mt-1.5">
+                    仅在关闭模拟模式时需要。真实模式需要完整的 L2 API 凭证。所有凭证将被安全存储。
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 border-yellow-400/50 text-yellow-400 hover:bg-yellow-400/10"
+                  onClick={() => navigate("/wallet-setup")}
+                >
+                  <Wallet className="w-4 h-4 mr-1.5" />
+                  钱包授权
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <FormField
