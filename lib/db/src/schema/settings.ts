@@ -9,6 +9,7 @@ export const settingsTable = pgTable("settings", {
   polymarketSecret: text("polymarket_secret"),
   polymarketPassphrase: text("polymarket_passphrase"),
   walletAddress: text("wallet_address"),
+  pinnedMarketSlugs: text("pinned_market_slugs").notNull().default("[]"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

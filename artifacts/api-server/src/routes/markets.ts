@@ -1,12 +1,27 @@
 import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
-import { db, marketsCacheTable } from "@workspace/db";
-import { fetchWorldCupMarkets, fetchMarketById } from "../lib/polymarket";
+import { db, marketsCacheTable, settingsTable } from "@workspace/db";
+import {
+  fetchWorldCupMarkets,
+  fetchMarketsBySlugs,
+  fetchMarketById,
+} from "../lib/polymarket";
 import { GetMarketsQueryParams } from "@workspace/api-zod";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getPinnedSlugs(): Promise<string[]> {
+  try {
+    const [settings] = await db.select().from(settingsTable).limit(1);
+    if (!settings?.pinnedMarketSlugs) return [];
+    return JSON.parse(settings.pinnedMarketSlugs) as string[];
+  } catch {
+    return [];
+  }
+}
 
 router.get("/markets", async (req, res): Promise<void> => {
   const parsed = GetMarketsQueryParams.safeParse(req.query);
@@ -15,7 +30,6 @@ router.get("/markets", async (req, res): Promise<void> => {
 
   try {
     if (!forceRefresh) {
-      // Check cache first
       const cutoff = new Date(Date.now() - CACHE_TTL_MS);
       const cached = await db.select().from(marketsCacheTable);
       const fresh = cached.filter(m => m.cachedAt && new Date(m.cachedAt) > cutoff);
@@ -33,21 +47,26 @@ router.get("/markets", async (req, res): Promise<void> => {
           outcomes: m.outcomes,
           cachedAt: m.cachedAt?.toISOString(),
         }));
-
         if (search) {
           const q = search.toLowerCase();
           markets = markets.filter(m => m.title.toLowerCase().includes(q));
         }
-
         res.json(markets);
         return;
       }
     }
 
-    // Fetch fresh from Polymarket
-    const markets = await fetchWorldCupMarkets(search);
+    // Fetch fresh: World Cup + pinned markets (e.g. FIFA Friendlies) in parallel
+    const pinnedSlugs = await getPinnedSlugs();
+    const [wcMarkets, pinnedMarkets] = await Promise.all([
+      fetchWorldCupMarkets(search),
+      pinnedSlugs.length > 0 ? fetchMarketsBySlugs(pinnedSlugs) : Promise.resolve([]),
+    ]);
 
-    // Upsert into cache (only when not filtering)
+    // Pinned markets at top, then WC markets sorted by date
+    const markets = [...pinnedMarkets, ...wcMarkets];
+
+    // Upsert into cache
     if (!search) {
       for (const m of markets) {
         await db
@@ -101,11 +120,66 @@ router.get("/markets", async (req, res): Promise<void> => {
   }
 });
 
+/**
+ * POST /api/markets/pinned
+ * Body: { slug: string, action: "add" | "remove" }
+ * Pins or unpins a Polymarket event slug so it always appears in the markets list.
+ */
+router.post("/markets/pinned", async (req, res): Promise<void> => {
+  const { slug, action } = req.body as { slug?: string; action?: string };
+  if (!slug || typeof slug !== "string") {
+    res.status(400).json({ error: "slug is required" });
+    return;
+  }
+  if (action !== "add" && action !== "remove") {
+    res.status(400).json({ error: "action must be 'add' or 'remove'" });
+    return;
+  }
+
+  try {
+    const [settings] = await db.select().from(settingsTable).limit(1);
+    const current: string[] = settings?.pinnedMarketSlugs
+      ? JSON.parse(settings.pinnedMarketSlugs)
+      : [];
+
+    let updated: string[];
+    if (action === "add") {
+      if (current.includes(slug)) {
+        res.json({ pinnedSlugs: current, message: "Already pinned" });
+        return;
+      }
+      // Verify the slug resolves on gamma-api before pinning
+      const markets = await fetchMarketsBySlugs([slug]);
+      if (markets.length === 0) {
+        res.status(404).json({ error: `No 3-outcome match market found for slug: ${slug}` });
+        return;
+      }
+      updated = [...current, slug];
+      logger.info({ slug }, "Pinned market slug");
+    } else {
+      updated = current.filter(s => s !== slug);
+      logger.info({ slug }, "Unpinned market slug");
+    }
+
+    await db
+      .update(settingsTable)
+      .set({ pinnedMarketSlugs: JSON.stringify(updated), updatedAt: new Date() })
+      .where(eq(settingsTable.id, settings.id));
+
+    // Bust the markets cache so next fetch picks up the change
+    await db.delete(marketsCacheTable);
+
+    res.json({ pinnedSlugs: updated });
+  } catch (err) {
+    req.log.error({ err }, "Failed to update pinned markets");
+    res.status(500).json({ error: "Failed to update pinned markets" });
+  }
+});
+
 router.get("/markets/:marketId", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.marketId) ? req.params.marketId[0] : req.params.marketId;
 
   try {
-    // Try cache first
     const [cached] = await db.select().from(marketsCacheTable).where(eq(marketsCacheTable.id, raw));
     if (cached) {
       res.json({
@@ -123,7 +197,6 @@ router.get("/markets/:marketId", async (req, res): Promise<void> => {
       return;
     }
 
-    // Fetch from Polymarket
     const market = await fetchMarketById(raw);
     if (!market) {
       res.status(404).json({ error: "Market not found" });

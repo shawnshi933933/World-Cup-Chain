@@ -2,7 +2,8 @@ import { createHmac } from "crypto";
 import { logger } from "./logger";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
-const POLYMARKET_SPORTS_URL = "https://polymarket.com/sports/world-cup/games";
+const POLYMARKET_WC_URL = "https://polymarket.com/sports/world-cup/games";
+const POLYMARKET_SOCCER_URL = "https://polymarket.com/sports/soccer/games";
 
 export interface PolymarketOutcome {
   name: string;
@@ -28,12 +29,17 @@ function priceToOdds(price: number): number {
   return Math.round((1 / price) * 100) / 100;
 }
 
-/** Fetch the list of match slugs from Polymarket's sports page __NEXT_DATA__ */
-async function fetchMatchSlugs(): Promise<string[]> {
-  const res = await fetch(POLYMARKET_SPORTS_URL, {
+/** Fetch match slugs from any Polymarket sports page __NEXT_DATA__ */
+async function fetchMatchSlugsByPage(
+  pageUrl: string,
+  slugPrefix: string
+): Promise<string[]> {
+  const res = await fetch(pageUrl, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
     },
     signal: AbortSignal.timeout(20000),
   });
@@ -41,7 +47,7 @@ async function fetchMatchSlugs(): Promise<string[]> {
   const m = html.match(
     /<script id="__NEXT_DATA__" type="application\/json"[^>]*>([\s\S]*?)<\/script>/
   );
-  if (!m) throw new Error("Could not find __NEXT_DATA__ in Polymarket page");
+  if (!m) throw new Error(`Could not find __NEXT_DATA__ in page: ${pageUrl}`);
   const data = JSON.parse(m[1]);
   const queries: any[] =
     data?.props?.pageProps?.dehydratedState?.queries || [];
@@ -50,11 +56,11 @@ async function fetchMatchSlugs(): Promise<string[]> {
   );
   const parentMap: Record<string, string[]> =
     parentMapQuery?.state?.data || {};
-  return Object.keys(parentMap).filter((s) => s.startsWith("fifwc-"));
+  return Object.keys(parentMap).filter((s) => s.startsWith(slugPrefix));
 }
 
 /** Parse a parent match event into a PolymarketMarket with 3 outcomes (Home/Draw/Away) */
-function parseMatchEvent(event: any): PolymarketMarket | null {
+function parseMatchEvent(event: any, category = "世界杯 2026"): PolymarketMarket | null {
   try {
     const title: string = event.title || "";
     if (!title.includes(" vs. ") && !title.includes(" vs ")) return null;
@@ -113,7 +119,7 @@ function parseMatchEvent(event: any): PolymarketMarket | null {
       id: event.id?.toString() || event.slug,
       slug: event.slug || "",
       title,
-      category: "世界杯 2026",
+      category,
       endDate: event.endDate || null,
       active: event.active ?? true,
       closed: event.closed ?? false,
@@ -124,6 +130,30 @@ function parseMatchEvent(event: any): PolymarketMarket | null {
     logger.warn({ err, slug: event?.slug }, "Failed to parse match event");
     return null;
   }
+}
+
+/** Fetch and parse a list of slugs into PolymarketMarkets */
+async function fetchAndParseEvents(
+  slugs: string[],
+  category: string
+): Promise<PolymarketMarket[]> {
+  if (slugs.length === 0) return [];
+  const BATCH_SIZE = 20;
+  const batches: string[][] = [];
+  for (let i = 0; i < slugs.length; i += BATCH_SIZE) {
+    batches.push(slugs.slice(i, i + BATCH_SIZE));
+  }
+  const batchResults = await Promise.all(
+    batches.map((batch) => fetchEventsBySlugs(batch))
+  );
+  const events = batchResults.flat();
+  logger.debug({ eventCount: events.length, category }, "Fetched events from gamma-api");
+  const markets: PolymarketMarket[] = [];
+  for (const event of events) {
+    const market = parseMatchEvent(event, category);
+    if (market) markets.push(market);
+  }
+  return markets;
 }
 
 /** Fetch a batch of events by slug from gamma-api */
@@ -145,37 +175,18 @@ export async function fetchWorldCupMarkets(
   search?: string
 ): Promise<PolymarketMarket[]> {
   try {
-    logger.info("Fetching World Cup match slugs from Polymarket sports page");
-    const slugs = await fetchMatchSlugs();
-    logger.info({ count: slugs.length }, "Found match slugs");
+    logger.info("Fetching World Cup match slugs from Polymarket");
+    const slugs = await fetchMatchSlugsByPage(POLYMARKET_WC_URL, "fifwc-");
+    logger.info({ count: slugs.length }, "Found World Cup slugs");
 
-    // Batch into groups of 20 and fetch in parallel
-    const BATCH_SIZE = 20;
-    const batches: string[][] = [];
-    for (let i = 0; i < slugs.length; i += BATCH_SIZE) {
-      batches.push(slugs.slice(i, i + BATCH_SIZE));
-    }
-
-    const batchResults = await Promise.all(
-      batches.map((batch) => fetchEventsBySlugs(batch))
-    );
-    const events = batchResults.flat();
-    logger.info({ eventCount: events.length }, "Fetched match events from Polymarket");
-
-    const markets: PolymarketMarket[] = [];
-    for (const event of events) {
-      const market = parseMatchEvent(event);
-      if (market) markets.push(market);
-    }
-
-    logger.info({ count: markets.length }, "Parsed match markets");
+    const markets = await fetchAndParseEvents(slugs, "世界杯 2026");
+    logger.info({ count: markets.length }, "Parsed World Cup markets");
 
     if (search) {
       const q = search.toLowerCase();
       return markets.filter((m) => m.title.toLowerCase().includes(q));
     }
 
-    // Sort by endDate ascending (upcoming matches first)
     markets.sort((a, b) => {
       if (!a.endDate) return 1;
       if (!b.endDate) return -1;
@@ -184,7 +195,47 @@ export async function fetchWorldCupMarkets(
 
     return markets;
   } catch (err) {
-    logger.error({ err }, "Failed to fetch Polymarket match markets");
+    logger.error({ err }, "Failed to fetch World Cup markets");
+    return [];
+  }
+}
+
+/** Fetch a set of markets by their Polymarket event slugs (used for pinned markets) */
+export async function fetchMarketsBySlugs(
+  slugs: string[],
+  category = "友谊赛"
+): Promise<PolymarketMarket[]> {
+  if (slugs.length === 0) return [];
+  return fetchAndParseEvents(slugs, category);
+}
+
+/** Fetch today's FIFA Friendlies markets from the Polymarket soccer page */
+export async function fetchFIFAFriendliesMarkets(
+  search?: string
+): Promise<PolymarketMarket[]> {
+  try {
+    logger.info("Fetching FIFA Friendlies slugs from Polymarket soccer page");
+    // fif-* = FIFA Friendlies; fifwc-* = World Cup (different prefix)
+    const slugs = await fetchMatchSlugsByPage(POLYMARKET_SOCCER_URL, "fif-");
+    logger.info({ count: slugs.length }, "Found FIFA Friendlies slugs");
+
+    const markets = await fetchAndParseEvents(slugs, "友谊赛");
+    logger.info({ count: markets.length }, "Parsed FIFA Friendlies markets");
+
+    if (search) {
+      const q = search.toLowerCase();
+      return markets.filter((m) => m.title.toLowerCase().includes(q));
+    }
+
+    markets.sort((a, b) => {
+      if (!a.endDate) return 1;
+      if (!b.endDate) return -1;
+      return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+    });
+
+    return markets;
+  } catch (err) {
+    logger.error({ err }, "Failed to fetch FIFA Friendlies markets");
     return [];
   }
 }
