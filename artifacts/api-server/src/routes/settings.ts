@@ -19,6 +19,7 @@ function formatSettings(s: any) {
     hasApiKey: envCreds || !!s.polymarketApiKey,
     hasSecret: envCreds || !!s.polymarketSecret,
     hasPassphrase: envCreds || !!s.polymarketPassphrase,
+    hasPrivateKey: !!(process.env.POLYMARKET_PRIVATE_KEY || s.polymarketPrivateKey),
     credentialsFromEnv: envCreds,
     polymarketApiKey: envCreds
       ? "env:POLYMARKET_API_KEY"
@@ -68,6 +69,9 @@ router.put("/settings", async (req, res): Promise<void> => {
       }
       if (parsed.data.walletAddress !== undefined) {
         updates.walletAddress = parsed.data.walletAddress;
+      }
+      if (parsed.data.polymarketPrivateKey !== undefined) {
+        updates.polymarketPrivateKey = parsed.data.polymarketPrivateKey;
       }
     }
 

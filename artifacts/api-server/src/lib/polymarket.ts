@@ -1,5 +1,35 @@
 import { createHmac } from "crypto";
+import { ethers } from "ethers";
 import { logger } from "./logger";
+
+const POLYGON_CHAIN_ID = 137;
+const CTF_EXCHANGE_ADDRESS = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+const NEG_RISK_CTF_EXCHANGE_ADDRESS = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
+
+const ORDER_TYPES = {
+  Order: [
+    { name: "salt", type: "uint256" },
+    { name: "maker", type: "address" },
+    { name: "signer", type: "address" },
+    { name: "taker", type: "address" },
+    { name: "tokenId", type: "uint256" },
+    { name: "makerAmount", type: "uint256" },
+    { name: "takerAmount", type: "uint256" },
+    { name: "expiration", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "feeRateBps", type: "uint256" },
+    { name: "side", type: "uint8" },
+    { name: "signatureType", type: "uint8" },
+  ],
+};
+
+function isNegRiskToken(tokenId: string): boolean {
+  try {
+    return (BigInt(tokenId) & (1n << 255n)) !== 0n;
+  } catch {
+    return false;
+  }
+}
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const POLYMARKET_WC_URL = "https://polymarket.com/sports/world-cup/games";
@@ -320,8 +350,9 @@ export async function placePolymarketOrder(params: {
   secret: string | null | undefined;
   passphrase: string | null | undefined;
   walletAddress: string | null | undefined;
+  privateKey: string | null | undefined;
 }): Promise<{ orderId: string } | null> {
-  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
+  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress || !params.privateKey) {
     logger.error("placePolymarketOrder called with incomplete credentials");
     return null;
   }
@@ -331,29 +362,68 @@ export async function placePolymarketOrder(params: {
   }
 
   try {
-    const tokenSize = params.sizeUsdc / params.price;
+    const makerAmount = BigInt(Math.round(params.sizeUsdc * 1e6));
+    const takerAmount = BigInt(Math.round((params.sizeUsdc / params.price) * 1e6));
+    const salt = BigInt(Math.floor(Math.random() * 1e15));
+
+    const negRisk = isNegRiskToken(params.tokenId);
+    const domain = {
+      name: "CTFExchange",
+      version: "1.0",
+      chainId: POLYGON_CHAIN_ID,
+      verifyingContract: negRisk ? NEG_RISK_CTF_EXCHANGE_ADDRESS : CTF_EXCHANGE_ADDRESS,
+    };
+
+    const orderData = {
+      salt,
+      maker: params.walletAddress,
+      signer: params.walletAddress,
+      taker: "0x0000000000000000000000000000000000000000",
+      tokenId: BigInt(params.tokenId),
+      makerAmount,
+      takerAmount,
+      expiration: 0n,
+      nonce: 0n,
+      feeRateBps: 0n,
+      side: 0,
+      signatureType: 0,
+    };
+
+    const wallet = new ethers.Wallet(params.privateKey);
+    const orderSignature = await wallet.signTypedData(domain, ORDER_TYPES, orderData);
+
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, tokenSize, price: params.price },
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: params.price, negRisk },
       "Placing Polymarket order"
     );
 
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const method = "POST";
-    const path = "/order";
     const bodyObj = {
+      order: {
+        salt: salt.toString(),
+        maker: params.walletAddress,
+        signer: params.walletAddress,
+        taker: "0x0000000000000000000000000000000000000000",
+        tokenId: params.tokenId,
+        makerAmount: makerAmount.toString(),
+        takerAmount: takerAmount.toString(),
+        expiration: "0",
+        nonce: "0",
+        feeRateBps: "0",
+        side: "BUY",
+        signatureType: 0,
+        signature: orderSignature,
+      },
+      owner: params.walletAddress,
       orderType: "GTC",
-      tokenID: params.tokenId,
-      side: "BUY",
-      size: tokenSize.toFixed(4),
-      price: params.price.toFixed(4),
     };
     const body = JSON.stringify(bodyObj);
 
-    const signature = buildPolymarketSignature({
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const requestSig = buildPolymarketSignature({
       secret: params.secret,
       timestamp,
-      method,
-      path,
+      method: "POST",
+      path: "/order",
       body,
     });
 
@@ -364,7 +434,7 @@ export async function placePolymarketOrder(params: {
         "POLY_ADDRESS": params.walletAddress,
         "POLY_API_KEY": params.apiKey,
         "POLY_PASSPHRASE": params.passphrase,
-        "POLY_SIGNATURE": signature,
+        "POLY_SIGNATURE": requestSig,
         "POLY_TIMESTAMP": timestamp,
       },
       body,
@@ -378,12 +448,12 @@ export async function placePolymarketOrder(params: {
     }
 
     const data = await res.json() as any;
-    const orderId = data.orderID || data.orderId || data.order?.id;
+    const orderId = data.orderID || data.orderId || data.order?.id || (data.success ? "placed" : null);
     if (!orderId) {
       logger.error({ data }, "Polymarket order response missing orderId");
       return null;
     }
-    return { orderId };
+    return { orderId: orderId.toString() };
   } catch (err) {
     logger.error({ err }, "Failed to place Polymarket order");
     return null;

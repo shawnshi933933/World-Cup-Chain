@@ -5,6 +5,7 @@ export interface PolymarketCredentials {
   secret: string;
   passphrase: string;
   walletAddress: string;
+  privateKey: string;
 }
 
 /**
@@ -17,9 +18,10 @@ export async function resolvePolymarketCredentials(): Promise<PolymarketCredenti
   const envSecret = process.env.POLYMARKET_SECRET;
   const envPassphrase = process.env.POLYMARKET_PASSPHRASE;
   const envWallet = process.env.POLYMARKET_WALLET;
+  const envPrivateKey = process.env.POLYMARKET_PRIVATE_KEY;
 
-  if (envKey && envSecret && envPassphrase && envWallet) {
-    return { apiKey: envKey, secret: envSecret, passphrase: envPassphrase, walletAddress: envWallet };
+  if (envKey && envSecret && envPassphrase && envWallet && envPrivateKey) {
+    return { apiKey: envKey, secret: envSecret, passphrase: envPassphrase, walletAddress: envWallet, privateKey: envPrivateKey };
   }
 
   const [settings] = await db.select().from(settingsTable).limit(1);
@@ -27,13 +29,15 @@ export async function resolvePolymarketCredentials(): Promise<PolymarketCredenti
     settings?.polymarketApiKey &&
     settings?.polymarketSecret &&
     settings?.polymarketPassphrase &&
-    settings?.walletAddress
+    settings?.walletAddress &&
+    settings?.polymarketPrivateKey
   ) {
     return {
       apiKey: settings.polymarketApiKey,
       secret: settings.polymarketSecret,
       passphrase: settings.polymarketPassphrase,
       walletAddress: settings.walletAddress,
+      privateKey: settings.polymarketPrivateKey,
     };
   }
 

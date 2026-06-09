@@ -21,7 +21,8 @@ const settingsSchema = z.object({
   polymarketApiKey: z.string().optional(),
   polymarketSecret: z.string().optional(),
   polymarketPassphrase: z.string().optional(),
-  walletAddress: z.string().optional()
+  walletAddress: z.string().optional(),
+  polymarketPrivateKey: z.string().optional(),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
@@ -100,7 +101,8 @@ export default function SettingsPage() {
       polymarketApiKey: "",
       polymarketSecret: "",
       polymarketPassphrase: "",
-      walletAddress: ""
+      walletAddress: "",
+      polymarketPrivateKey: "",
     }
   });
 
@@ -111,7 +113,8 @@ export default function SettingsPage() {
         polymarketApiKey: settings.hasApiKey ? "••••••••" : "",
         polymarketSecret: settings.hasSecret ? "••••••••" : "",
         polymarketPassphrase: settings.hasPassphrase ? "••••••••" : "",
-        walletAddress: settings.walletAddress || ""
+        walletAddress: settings.walletAddress || "",
+        polymarketPrivateKey: (settings as any).hasPrivateKey ? "••••••••" : "",
       });
     }
   }, [settings, form]);
@@ -126,6 +129,9 @@ export default function SettingsPage() {
     }
     if (data.polymarketPassphrase && !data.polymarketPassphrase.startsWith("••••")) {
       payload.polymarketPassphrase = data.polymarketPassphrase;
+    }
+    if (data.polymarketPrivateKey && !data.polymarketPrivateKey.startsWith("••••")) {
+      payload.polymarketPrivateKey = data.polymarketPrivateKey;
     }
 
     updateSettings.mutate({ data: payload }, {
@@ -338,6 +344,35 @@ export default function SettingsPage() {
                     </FormControl>
                     <FormDescription>
                       用于接收派发的奖金。
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="polymarketPrivateKey"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <Key className="w-4 h-4 text-red-400" />
+                      钱包私钥 <span className="text-xs text-red-400 font-normal">（用于 EIP-712 订单签名）</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="0x..."
+                        type="password"
+                        autoComplete="off"
+                        {...field}
+                        className="font-mono bg-background"
+                      />
+                    </FormControl>
+                    {(settings as any)?.hasPrivateKey && (
+                      <FormDescription className="text-green-500">✓ 已配置</FormDescription>
+                    )}
+                    <FormDescription className="text-yellow-500/80">
+                      ⚠️ 私钥仅存于你的服务器，用于签署每笔 Polymarket 订单。
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

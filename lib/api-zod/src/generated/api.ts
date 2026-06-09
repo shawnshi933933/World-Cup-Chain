@@ -255,7 +255,8 @@ export const UpdateSettingsBody = zod.object({
   "polymarketApiKey": zod.string().nullish(),
   "polymarketSecret": zod.string().nullish().describe('Polymarket L2 API secret for HMAC signing'),
   "polymarketPassphrase": zod.string().nullish().describe('Polymarket L2 API passphrase'),
-  "walletAddress": zod.string().nullish()
+  "walletAddress": zod.string().nullish(),
+  "polymarketPrivateKey": zod.string().nullish().describe('Wallet private key for EIP-712 order signing')
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -264,7 +265,8 @@ export const UpdateSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean()
+  "hasPassphrase": zod.boolean(),
+  "hasPrivateKey": zod.boolean()
 })
 
 
