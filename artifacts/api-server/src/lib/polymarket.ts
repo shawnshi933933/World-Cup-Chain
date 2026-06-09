@@ -304,7 +304,8 @@ function buildPolymarketSignature(params: {
   const message = params.timestamp + params.method + params.path + params.body;
   let keyBuf: Buffer;
   try {
-    keyBuf = Buffer.from(params.secret, "base64");
+    const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
+    keyBuf = Buffer.from(normalized, "base64");
   } catch {
     keyBuf = Buffer.from(params.secret, "utf8");
   }
