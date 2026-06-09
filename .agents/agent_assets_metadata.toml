@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "UDCw7iM69BeAo_kkzKMIz"
+uri = "file://项目总结.md"
+type = "text"
+title = "炜新联手征战世界杯 — 项目总结"
