@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { createHash } from "crypto";
 import { db, settingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { ethers } from "ethers";
 
 const router: IRouter = Router();
 
@@ -40,21 +41,35 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
   }
 
   try {
-    // Official Polymarket TS clob-client always sends nonce=0 for derive-key.
-    // Python client sends recovery_id (v-27); we match TS client here.
-    const nonce = 0;
+    // --- Local verification so we can confirm our signature is correct ---
+    let recoveredAddress = "(error)";
+    let localVerifyOk = false;
+    try {
+      recoveredAddress = ethers.verifyMessage(String(timestamp), signature);
+      localVerifyOk = recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
+    } catch (e) {
+      req.log.warn({ err: e }, "Local ethers.verifyMessage threw");
+    }
 
-    // Python client sends signature WITHOUT 0x prefix; TS client WITH.
-    // Try without first (matches py-clob-client behaviour).
-    const sigStripped = signature.replace(/^0x/, "");
+    // Recovery id from the last byte of the signature (v - 27)
+    const sigHex = signature.replace(/^0x/, "");
+    const v = parseInt(sigHex.slice(-2), 16);
+    const nonce = v >= 27 ? v - 27 : v;
+    // Strip 0x to match py-clob-client format
+    const sigStripped = sigHex;
 
     req.log.info({
       walletAddress,
+      recoveredAddress,
+      localVerifyOk,
       timestamp: String(timestamp),
       sigLength: sigStripped.length,
-      sigPrefix: sigStripped.slice(0, 8),
       nonce,
     }, "Forwarding to Polymarket /auth/api-key");
+
+    if (!localVerifyOk) {
+      req.log.warn({ walletAddress, recoveredAddress }, "Signature does not match wallet – local verify failed");
+    }
 
     const polyRes = await fetch(`${CLOB_HOST}/auth/api-key`, {
       method: "POST",
