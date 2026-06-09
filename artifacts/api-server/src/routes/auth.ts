@@ -67,14 +67,21 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
       nonce,
     }, "Forwarding to Polymarket /auth/api-key");
 
+    // If local verify failed, the signing account differs from the connected account.
+    // Use the recovered (actual signer) address for POLY_ADDRESS so Polymarket can verify.
+    const effectiveAddress = localVerifyOk ? walletAddress : recoveredAddress;
+
     if (!localVerifyOk) {
-      req.log.warn({ walletAddress, recoveredAddress }, "Signature does not match wallet – local verify failed");
+      req.log.warn(
+        { walletAddress, recoveredAddress, effectiveAddress },
+        "Signing account differs from connected account – using recovered address for Polymarket"
+      );
     }
 
     const polyRes = await fetch(`${CLOB_HOST}/auth/api-key`, {
       method: "POST",
       headers: {
-        "POLY_ADDRESS":   walletAddress,
+        "POLY_ADDRESS":   effectiveAddress,
         "POLY_SIGNATURE": sigStripped,
         "POLY_TIMESTAMP": String(timestamp),
         "POLY_NONCE":     String(nonce),
@@ -99,7 +106,7 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
       return;
     }
 
-    res.json({ apiKey, secret, passphrase, walletAddress });
+    res.json({ apiKey, secret, passphrase, walletAddress: effectiveAddress });
   } catch (err) {
     req.log.error({ err }, "Failed to proxy auth/api-key");
     res.status(502).json({ error: "Failed to reach Polymarket CLOB API" });
