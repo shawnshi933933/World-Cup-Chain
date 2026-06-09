@@ -1,8 +1,33 @@
 import { Router, type IRouter } from "express";
+import { createHash } from "crypto";
 import { db, settingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+function appToken(): string | null {
+  const pw = process.env.APP_PASSWORD;
+  if (!pw) return null;
+  return createHash("sha256").update(pw).digest("hex");
+}
+
+router.post("/auth/login", async (req, res): Promise<void> => {
+  const token = appToken();
+  if (!token) {
+    res.json({ open: true, token: null });
+    return;
+  }
+  const { password } = req.body ?? {};
+  if (!password || password !== process.env.APP_PASSWORD) {
+    res.status(401).json({ error: "密码错误" });
+    return;
+  }
+  res.json({ open: false, token });
+});
+
+router.get("/auth/check", (_req, res): void => {
+  res.json({ ok: true });
+});
 
 const CLOB_HOST = "https://clob.polymarket.com";
 

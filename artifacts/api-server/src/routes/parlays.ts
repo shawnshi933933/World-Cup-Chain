@@ -206,6 +206,32 @@ router.get("/parlays/:parlayId", async (req, res): Promise<void> => {
   }
 });
 
+router.delete("/parlays/simulation", async (req, res): Promise<void> => {
+  try {
+    const simParlays = await db
+      .select({ id: parlaysTable.id })
+      .from(parlaysTable)
+      .where(eq(parlaysTable.simulationMode, true));
+
+    if (simParlays.length === 0) {
+      res.json({ deleted: 0 });
+      return;
+    }
+
+    const ids = simParlays.map(p => p.id);
+    for (const id of ids) {
+      await db.delete(parlayLegsTable).where(eq(parlayLegsTable.parlayId, id));
+    }
+    await db.delete(parlaysTable).where(eq(parlaysTable.simulationMode, true));
+
+    req.log.info({ count: ids.length }, "Deleted simulation parlays");
+    res.json({ deleted: ids.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to delete simulation parlays");
+    res.status(500).json({ error: "Failed to delete simulation parlays" });
+  }
+});
+
 router.delete("/parlays/:parlayId", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.parlayId) ? req.params.parlayId[0] : req.params.parlayId;
   const parlayId = parseInt(raw, 10);
