@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useLocation } from "wouter";
-import { useGetSettings, useUpdateSettings } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useGetSettings, useUpdateSettings, getGetParlaysQueryKey, getGetParlayStatsQueryKey } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -11,7 +12,8 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Shield, Key, Wallet, Save, Activity, Lock } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Shield, Key, Wallet, Save, Activity, Lock, Trash2, FlaskConical } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const settingsSchema = z.object({
@@ -24,11 +26,31 @@ const settingsSchema = z.object({
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
+  const [deleting, setDeleting] = useState(false);
   const { data: settings, isLoading } = useGetSettings();
   const updateSettings = useUpdateSettings();
+
+  async function clearSimulationData() {
+    setDeleting(true);
+    try {
+      const r = await fetch(`${BASE}/api/parlays/simulation`, { method: "DELETE" });
+      const data = await r.json() as { deleted?: number; error?: string };
+      if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+      queryClient.invalidateQueries({ queryKey: getGetParlaysQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetParlayStatsQueryKey() });
+      toast({ title: `已清除 ${data.deleted ?? 0} 条模拟串关记录` });
+    } catch (e: unknown) {
+      toast({ title: "清除失败", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -266,6 +288,59 @@ export default function SettingsPage() {
                 {!updateSettings.isPending && <Save className="ml-2 w-4 h-4" />}
               </Button>
             </CardFooter>
+          </Card>
+
+          <Card className="border-red-500/30 bg-card/50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-red-400">
+                <FlaskConical className="w-5 h-5" />
+                数据管理
+              </CardTitle>
+              <CardDescription>
+                切换到真实投注模式前，建议先清除所有模拟记录，避免与真实数据混淆。
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+                <div>
+                  <p className="font-medium text-sm">清空模拟串关记录</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    删除所有 <span className="text-yellow-400 font-mono">simulation_mode = true</span> 的串关及其投注腿，不影响真实数据。
+                  </p>
+                </div>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={deleting}
+                      className="shrink-0 ml-4 border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                    >
+                      <Trash2 className="w-4 h-4 mr-1.5" />
+                      {deleting ? "清除中..." : "清除模拟数据"}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>确认清除模拟数据？</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        此操作将永久删除所有模拟串关记录（包括进行中和已结算的），无法恢复。真实模式下的串关不受影响。
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>取消</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={clearSimulationData}
+                        className="bg-red-500 hover:bg-red-600 text-white"
+                      >
+                        确认清除
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </CardContent>
           </Card>
 
         </form>
