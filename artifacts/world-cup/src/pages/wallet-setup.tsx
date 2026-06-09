@@ -78,9 +78,18 @@ export default function WalletSetupPage() {
     setLoading(true);
     try {
       const timestamp = Math.floor(Date.now() / 1000).toString();
+      // Hex-encode the UTF-8 bytes of the timestamp so MetaMask handles it
+      // unambiguously (plain decimal strings can be misinterpreted by some
+      // wallet versions).  ethers.verifyMessage on the backend still receives
+      // the plain string and re-encodes to UTF-8 before hashing – identical.
+      const timestampHex =
+        "0x" +
+        Array.from(new TextEncoder().encode(timestamp))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
       const signature = await window.ethereum!.request({
         method: "personal_sign",
-        params: [timestamp, walletAddress],
+        params: [timestampHex, walletAddress],
       }) as string;
 
       const data = await apiPost("/api/auth/derive-key", { walletAddress, signature, timestamp }) as Creds;
