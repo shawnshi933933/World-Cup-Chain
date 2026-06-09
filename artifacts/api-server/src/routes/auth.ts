@@ -84,7 +84,10 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
         "POLY_ADDRESS":   effectiveAddress,
         "POLY_SIGNATURE": sigStripped,
         "POLY_TIMESTAMP": String(timestamp),
-        "POLY_NONCE":     String(nonce),
+        "POLY_NONCE":     "0",
+        "Origin":         "https://polymarket.com",
+        "Referer":        "https://polymarket.com/",
+        "Content-Type":   "application/json",
       },
     });
 
