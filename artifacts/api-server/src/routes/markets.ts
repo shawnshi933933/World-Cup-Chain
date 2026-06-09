@@ -51,6 +51,11 @@ router.get("/markets", async (req, res): Promise<void> => {
           const q = search.toLowerCase();
           markets = markets.filter(m => m.title.toLowerCase().includes(q));
         }
+        markets.sort((a, b) => {
+          if (!a.endDate) return 1;
+          if (!b.endDate) return -1;
+          return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+        });
         res.json(markets);
         return;
       }
@@ -63,8 +68,12 @@ router.get("/markets", async (req, res): Promise<void> => {
       pinnedSlugs.length > 0 ? fetchMarketsBySlugs(pinnedSlugs) : Promise.resolve([]),
     ]);
 
-    // Pinned markets at top, then WC markets sorted by date
-    const markets = [...pinnedMarkets, ...wcMarkets];
+    // Merge and sort everything by date
+    const markets = [...pinnedMarkets, ...wcMarkets].sort((a, b) => {
+      if (!a.endDate) return 1;
+      if (!b.endDate) return -1;
+      return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+    });
 
     // Upsert into cache
     if (!search) {
