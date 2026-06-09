@@ -40,12 +40,23 @@ router.post("/auth/derive-key", async (req, res): Promise<void> => {
   }
 
   try {
+    // Derive POLY_NONCE from the signature's recovery byte (v).
+    // MetaMask personal_sign returns 0x + 130 hex chars (65 bytes: r, s, v).
+    // Polymarket expects nonce = v - 27 (→ 0 or 1).
+    let nonce = 0;
+    try {
+      const sigHex = signature.replace(/^0x/, "");
+      const v = parseInt(sigHex.slice(-2), 16);
+      nonce = v >= 27 ? v - 27 : v;
+    } catch { /* leave nonce = 0 */ }
+
     const polyRes = await fetch(`${CLOB_HOST}/auth/api-key`, {
       method: "POST",
       headers: {
         "POLY_ADDRESS":   walletAddress,
         "POLY_SIGNATURE": signature,
         "POLY_TIMESTAMP": String(timestamp),
+        "POLY_NONCE":     String(nonce),
       },
     });
 
