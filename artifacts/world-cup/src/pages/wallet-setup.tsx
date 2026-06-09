@@ -25,9 +25,13 @@ declare global {
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 async function apiFetch(method: string, path: string, body: object) {
+  const token = localStorage.getItem("app_token") ?? "";
   const r = await fetch(`${BASE}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify(body),
   });
   const data = await r.json();

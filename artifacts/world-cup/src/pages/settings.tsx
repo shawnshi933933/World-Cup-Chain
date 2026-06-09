@@ -39,7 +39,11 @@ export default function SettingsPage() {
   async function clearSimulationData() {
     setDeleting(true);
     try {
-      const r = await fetch(`${BASE}/api/parlays/simulation`, { method: "DELETE" });
+      const token = localStorage.getItem("app_token") ?? "";
+      const r = await fetch(`${BASE}/api/parlays/simulation`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await r.json() as { deleted?: number; error?: string };
       if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
       queryClient.invalidateQueries({ queryKey: getGetParlaysQueryKey() });
