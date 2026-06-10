@@ -1,27 +1,14 @@
-import { createHmac } from "crypto";
-import { ethers } from "ethers";
 import { logger } from "./logger";
-
-const POLYGON_CHAIN_ID = 137;
-const CTF_EXCHANGE_ADDRESS = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
-const NEG_RISK_CTF_EXCHANGE_ADDRESS = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
-
-const ORDER_TYPES = {
-  Order: [
-    { name: "salt", type: "uint256" },
-    { name: "maker", type: "address" },
-    { name: "signer", type: "address" },
-    { name: "taker", type: "address" },
-    { name: "tokenId", type: "uint256" },
-    { name: "makerAmount", type: "uint256" },
-    { name: "takerAmount", type: "uint256" },
-    { name: "expiration", type: "uint256" },
-    { name: "nonce", type: "uint256" },
-    { name: "feeRateBps", type: "uint256" },
-    { name: "side", type: "uint8" },
-    { name: "signatureType", type: "uint8" },
-  ],
-};
+import { createWalletClient, http, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { polygon } from "viem/chains";
+import {
+  AssetType,
+  ClobClient,
+  OrderType,
+  Side,
+  SignatureTypeV2,
+} from "@polymarket/clob-client-v2";
 
 async function fetchTokenInfo(tokenId: string): Promise<{ tickSize: number; negRisk: boolean }> {
   try {
@@ -339,24 +326,6 @@ export async function checkMarketResolution(
   }
 }
 
-function buildPolymarketSignature(params: {
-  secret: string;
-  timestamp: string;
-  method: string;
-  path: string;
-  body: string;
-}): string {
-  const message = params.timestamp + params.method + params.path + params.body;
-  let keyBuf: Buffer;
-  try {
-    const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
-    keyBuf = Buffer.from(normalized, "base64");
-  } catch {
-    keyBuf = Buffer.from(params.secret, "utf8");
-  }
-  return createHmac("sha256", keyBuf).update(message).digest("base64");
-}
-
 export async function placePolymarketOrder(params: {
   tokenId: string;
   price: number;
@@ -364,140 +333,109 @@ export async function placePolymarketOrder(params: {
   apiKey: string | null | undefined;
   secret: string | null | undefined;
   passphrase: string | null | undefined;
-  walletAddress: string | null | undefined;
-  privateKey?: string | null | undefined;
+  walletAddress: string | null | undefined;  // deposit wallet address (0xe6B765...)
+  privateKey?: string | null | undefined;     // EOA owner private key (signs on behalf of deposit wallet)
 }): Promise<{ orderId: string } | null> {
   if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
-    logger.error("placePolymarketOrder called with incomplete credentials");
+    logger.error("placePolymarketOrder: incomplete credentials");
+    return null;
+  }
+  if (!params.privateKey || params.privateKey.startsWith("••••")) {
+    logger.error("placePolymarketOrder: EOA private key required for POLY_1271 deposit wallet orders");
     return null;
   }
   if (params.price <= 0 || params.price >= 1) {
-    logger.error({ price: params.price }, "Invalid market price for order");
+    logger.error({ price: params.price }, "Invalid price for order");
     return null;
   }
 
   try {
-    // Determine which wallet to use for signing and POLY_ADDRESS:
-    // - If a valid L1 private key is provided, use that (full official flow)
-    // - Otherwise derive L2 signer from secret bytes (POLY_1271 default)
-    let signerWallet: ethers.Wallet;
-    if (params.privateKey && params.privateKey.trim() && !params.privateKey.startsWith("••••")) {
-      try {
-        const pk = params.privateKey.trim().startsWith("0x") ? params.privateKey.trim() : `0x${params.privateKey.trim()}`;
-        signerWallet = new ethers.Wallet(pk);
-        logger.info({ signerAddress: signerWallet.address }, "Using L1 private key for signing");
-      } catch (pkErr) {
-        logger.warn({ pkErr }, "Invalid private key stored, falling back to L2 wallet derived from secret");
-        const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
-        const l2KeyBytes = Buffer.from(normalized, "base64");
-        signerWallet = new ethers.Wallet("0x" + l2KeyBytes.toString("hex"));
-      }
-    } else {
-      // POLY_1271: derive L2 signer from secret (secret bytes = L2 private key)
-      const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
-      const l2KeyBytes = Buffer.from(normalized, "base64");
-      signerWallet = new ethers.Wallet("0x" + l2KeyBytes.toString("hex"));
-      logger.info({ signerAddress: signerWallet.address }, "Using L2 wallet (derived from secret) for signing");
-    }
+    const pk = (params.privateKey.trim().startsWith("0x")
+      ? params.privateKey.trim()
+      : `0x${params.privateKey.trim()}`) as Hex;
 
-    // Fetch tick_size and neg_risk from Polymarket CLOB API
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({
+      account,
+      chain: polygon,
+      transport: http(),
+    });
+
+    const creds = {
+      key: params.apiKey,
+      secret: params.secret,
+      passphrase: params.passphrase,
+    };
+
+    // maker = signer = deposit wallet address (per POLY_1271 docs)
+    // actual signing key = EOA account (owner of deposit wallet)
+    const clob = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer: walletClient as any,
+      creds,
+      signatureType: SignatureTypeV2.POLY_1271,
+      funderAddress: params.walletAddress,
+    });
+
     const { tickSize, negRisk } = await fetchTokenInfo(params.tokenId);
-
-    // Round price to nearest tick (INVALID_ORDER_MIN_TICK_SIZE if not rounded)
     const roundedPrice = roundToTick(params.price, tickSize);
-
-    const makerAmount = BigInt(Math.round(params.sizeUsdc * 1e6));
-    const takerAmount = BigInt(Math.round((params.sizeUsdc / roundedPrice) * 1e6));
-    const salt = BigInt(Math.floor(Math.random() * 1e15));
-
-    const domain = {
-      name: "CTFExchange",
-      version: "1.0",
-      chainId: POLYGON_CHAIN_ID,
-      verifyingContract: negRisk ? NEG_RISK_CTF_EXCHANGE_ADDRESS : CTF_EXCHANGE_ADDRESS,
-    };
-
-    const orderData = {
-      salt,
-      maker: params.walletAddress,   // funder / deposit wallet address
-      signer: signerWallet.address,  // EOA that signs (no gas fees in deposit wallet mode)
-      taker: "0x0000000000000000000000000000000000000000",
-      tokenId: BigInt(params.tokenId),
-      makerAmount,
-      takerAmount,
-      expiration: 0n,
-      nonce: 0n,
-      feeRateBps: 0n,
-      side: 0,
-      signatureType: 3,              // POLY_1271: deposit wallet mode
-    };
-
-    const orderSignature = await signerWallet.signTypedData(domain, ORDER_TYPES, orderData);
+    // size = conditional tokens to buy = USDC / price
+    const sizeTokens = params.sizeUsdc / roundedPrice;
 
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, signer: signerWallet.address, funder: params.walletAddress },
-      "Placing Polymarket order (POLY_1271)"
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, signer: account.address, depositWallet: params.walletAddress },
+      "Placing Polymarket order via SDK (POLY_1271)"
     );
 
-    const bodyObj = {
-      order: {
-        salt: salt.toString(),
-        maker: params.walletAddress,
-        signer: signerWallet.address,
-        taker: "0x0000000000000000000000000000000000000000",
-        tokenId: params.tokenId,
-        makerAmount: makerAmount.toString(),
-        takerAmount: takerAmount.toString(),
-        expiration: "0",
-        nonce: "0",
-        feeRateBps: "0",
-        side: "BUY",
-        signatureType: 3,
-        signature: orderSignature,
-      },
-      owner: params.walletAddress,
-      orderType: "GTC",
-    };
-    const body = JSON.stringify(bodyObj);
+    const result = await clob.createAndPostOrder(
+      { tokenID: params.tokenId, price: roundedPrice, size: sizeTokens, side: Side.BUY },
+      { tickSize: tickSize.toString(), negRisk },
+      OrderType.GTC,
+    ) as any;
 
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const requestSig = buildPolymarketSignature({
-      secret: params.secret,
-      timestamp,
-      method: "POST",
-      path: "/order",
-      body,
-    });
-
-    const res = await fetch("https://clob.polymarket.com/order", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "POLY_ADDRESS": signerWallet.address,
-        "POLY_API_KEY": params.apiKey,
-        "POLY_PASSPHRASE": params.passphrase,
-        "POLY_SIGNATURE": requestSig,
-        "POLY_TIMESTAMP": timestamp,
-      },
-      body,
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      logger.error({ status: res.status, body: text }, "Polymarket order failed");
-      return null;
-    }
-
-    const data = await res.json() as any;
-    const orderId = data.orderID || data.orderId || data.order?.id || (data.success ? "placed" : null);
+    const orderId = result?.orderID || result?.orderId || result?.order?.id || (result?.success ? "placed" : null);
     if (!orderId) {
-      logger.error({ data }, "Polymarket order response missing orderId");
+      logger.error({ result }, "Polymarket SDK order: missing orderId in response");
       return null;
     }
+    logger.info({ orderId }, "Polymarket order placed successfully");
     return { orderId: orderId.toString() };
   } catch (err) {
-    logger.error({ err }, "Failed to place Polymarket order");
+    logger.error({ err }, "Failed to place Polymarket order via SDK");
     return null;
+  }
+}
+
+export async function syncPolymarketBalance(params: {
+  apiKey: string;
+  secret: string;
+  passphrase: string;
+  walletAddress: string;
+  privateKey: string;
+}): Promise<boolean> {
+  try {
+    const pk = (params.privateKey.trim().startsWith("0x")
+      ? params.privateKey.trim()
+      : `0x${params.privateKey.trim()}`) as Hex;
+
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
+
+    const clob = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer: walletClient as any,
+      creds: { key: params.apiKey, secret: params.secret, passphrase: params.passphrase },
+      signatureType: SignatureTypeV2.POLY_1271,
+      funderAddress: params.walletAddress,
+    });
+
+    await clob.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+    logger.info({ depositWallet: params.walletAddress }, "Balance allowance synced with Polymarket CLOB");
+    return true;
+  } catch (err) {
+    logger.warn({ err }, "Failed to sync balance allowance (may be geo-blocked or already synced)");
+    return false;
   }
 }
