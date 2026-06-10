@@ -32,17 +32,25 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const GET_KEY_SCRIPT = `pip install py-clob-client-v2
 python3 - <<'PY'
 import json
-from py_clob_client_v2 import ClobClient
+from py_clob_client_v2 import ClobClient, SignatureTypeV2
 
-# 替换成你的私钥（MetaMask 导出的那个，0x 开头）
-PRIVATE_KEY = "0x你的私钥"
+# 替换成你的 EOA 私钥（MetaMask 导出的那个，0x 开头）
+PRIVATE_KEY    = "0x你的私钥"
+# Deposit wallet 地址（Polymarket 充值页面显示的那个地址）
+DEPOSIT_WALLET = "0xe6B765193A1d37E722A35338674BDAD190C69B24"
 
-client = ClobClient("https://clob.polymarket.com", key=PRIVATE_KEY, chain_id=137)
-creds  = client.create_or_derive_api_key()
+client = ClobClient(
+    "https://clob.polymarket.com",
+    key=PRIVATE_KEY,
+    chain_id=137,
+    signature_type=SignatureTypeV2.POLY_1271,
+    funder=DEPOSIT_WALLET,
+)
+creds = client.create_or_derive_api_key()
 
 out = creds if isinstance(creds, dict) else creds.__dict__
 print(json.dumps(out, indent=2))
-# 把 api_key / api_secret / api_passphrase 填到下方
+# 把输出的 api_key / api_secret / api_passphrase 填到设置页面
 PY`;
 
 function CopyButton({ text }: { text: string }) {
