@@ -417,15 +417,10 @@ export async function placePolymarketOrder(params: {
       verifyingContract: negRisk ? NEG_RISK_CTF_EXCHANGE_ADDRESS : CTF_EXCHANGE_ADDRESS,
     };
 
-    // If maker == signer (both are the same EOA address), use type 0 (EOA).
-    // If they differ (separate deposit wallet contract), use type 3 (POLY_1271).
-    const isEOAMode = params.walletAddress.toLowerCase() === signerWallet.address.toLowerCase();
-    const orderSignatureType = isEOAMode ? 0 : 3;
-
     const orderData = {
       salt,
-      maker: params.walletAddress,       // funder / deposit wallet
-      signer: signerWallet.address,      // EOA that signs the order
+      maker: params.walletAddress,   // funder / deposit wallet address
+      signer: signerWallet.address,  // EOA that signs (no gas fees in deposit wallet mode)
       taker: "0x0000000000000000000000000000000000000000",
       tokenId: BigInt(params.tokenId),
       makerAmount,
@@ -434,14 +429,14 @@ export async function placePolymarketOrder(params: {
       nonce: 0n,
       feeRateBps: 0n,
       side: 0,
-      signatureType: orderSignatureType,
+      signatureType: 3,              // POLY_1271: deposit wallet mode
     };
 
     const orderSignature = await signerWallet.signTypedData(domain, ORDER_TYPES, orderData);
 
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, signer: signerWallet.address, funder: params.walletAddress, orderSignatureType, isEOAMode },
-      "Placing Polymarket order"
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, signer: signerWallet.address, funder: params.walletAddress },
+      "Placing Polymarket order (POLY_1271)"
     );
 
     const bodyObj = {
@@ -457,7 +452,7 @@ export async function placePolymarketOrder(params: {
         nonce: "0",
         feeRateBps: "0",
         side: "BUY",
-        signatureType: orderSignatureType,
+        signatureType: 3,
         signature: orderSignature,
       },
       owner: params.walletAddress,
