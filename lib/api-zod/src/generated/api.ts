@@ -82,7 +82,7 @@ export const GetParlaysResponseItem = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -148,7 +148,7 @@ export const GetParlayResponse = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -201,7 +201,7 @@ export const StartParlayResponse = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -235,6 +235,14 @@ export const StartParlayResponse = zod.object({
 
 
 /**
+ * @summary Manually close (cancel) an error or active parlay
+ */
+export const CloseParlayParams = zod.object({
+  "parlayId": zod.coerce.number()
+})
+
+
+/**
  * @summary Get app settings
  */
 export const GetSettingsResponse = zod.object({
@@ -265,8 +273,7 @@ export const UpdateSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean(),
-  "hasPrivateKey": zod.boolean()
+  "hasPassphrase": zod.boolean()
 })
 
 

@@ -23,12 +23,27 @@ const ORDER_TYPES = {
   ],
 };
 
-function isNegRiskToken(tokenId: string): boolean {
+async function fetchTokenInfo(tokenId: string): Promise<{ tickSize: number; negRisk: boolean }> {
   try {
-    return (BigInt(tokenId) & (1n << 255n)) !== 0n;
-  } catch {
-    return false;
+    const [tickRes, negRiskRes] = await Promise.all([
+      fetch(`https://clob.polymarket.com/tick-size?token_id=${tokenId}`, { signal: AbortSignal.timeout(10000) }),
+      fetch(`https://clob.polymarket.com/neg-risk?token_id=${tokenId}`, { signal: AbortSignal.timeout(10000) }),
+    ]);
+    const tickData = await tickRes.json() as any;
+    const negRiskData = await negRiskRes.json() as any;
+    const tickSize = parseFloat(tickData.minimum_tick_size ?? tickData.tick_size ?? "0.01");
+    const negRisk = !!(negRiskData.neg_risk ?? negRiskData.negRisk ?? false);
+    logger.info({ tokenId, tickSize, negRisk }, "Fetched token info from CLOB API");
+    return { tickSize: isNaN(tickSize) ? 0.01 : tickSize, negRisk };
+  } catch (err) {
+    logger.warn({ err, tokenId }, "Failed to fetch token info, using defaults (tick=0.01, negRisk=false)");
+    return { tickSize: 0.01, negRisk: false };
   }
+}
+
+function roundToTick(price: number, tickSize: number): number {
+  const factor = Math.round(1 / tickSize);
+  return Math.round(price * factor) / factor;
 }
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
@@ -350,9 +365,8 @@ export async function placePolymarketOrder(params: {
   secret: string | null | undefined;
   passphrase: string | null | undefined;
   walletAddress: string | null | undefined;
-  privateKey: string | null | undefined;
 }): Promise<{ orderId: string } | null> {
-  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress || !params.privateKey) {
+  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
     logger.error("placePolymarketOrder called with incomplete credentials");
     return null;
   }
@@ -362,11 +376,21 @@ export async function placePolymarketOrder(params: {
   }
 
   try {
+    // Derive L2 wallet from decoded secret (secret IS the L2 private key, base64-encoded)
+    const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
+    const l2KeyBytes = Buffer.from(normalized, "base64");
+    const l2Wallet = new ethers.Wallet("0x" + l2KeyBytes.toString("hex"));
+
+    // Fetch tick_size and neg_risk from Polymarket CLOB API
+    const { tickSize, negRisk } = await fetchTokenInfo(params.tokenId);
+
+    // Round price to nearest tick (INVALID_ORDER_MIN_TICK_SIZE if not rounded)
+    const roundedPrice = roundToTick(params.price, tickSize);
+
     const makerAmount = BigInt(Math.round(params.sizeUsdc * 1e6));
-    const takerAmount = BigInt(Math.round((params.sizeUsdc / params.price) * 1e6));
+    const takerAmount = BigInt(Math.round((params.sizeUsdc / roundedPrice) * 1e6));
     const salt = BigInt(Math.floor(Math.random() * 1e15));
 
-    const negRisk = isNegRiskToken(params.tokenId);
     const domain = {
       name: "CTFExchange",
       version: "1.0",
@@ -376,8 +400,8 @@ export async function placePolymarketOrder(params: {
 
     const orderData = {
       salt,
-      maker: params.walletAddress,
-      signer: params.walletAddress,
+      maker: params.walletAddress,   // funder / deposit address
+      signer: l2Wallet.address,      // L2 signer derived from secret
       taker: "0x0000000000000000000000000000000000000000",
       tokenId: BigInt(params.tokenId),
       makerAmount,
@@ -386,14 +410,13 @@ export async function placePolymarketOrder(params: {
       nonce: 0n,
       feeRateBps: 0n,
       side: 0,
-      signatureType: 0,
+      signatureType: 3,              // POLY_1271 — required for proxy wallet accounts
     };
 
-    const wallet = new ethers.Wallet(params.privateKey);
-    const orderSignature = await wallet.signTypedData(domain, ORDER_TYPES, orderData);
+    const orderSignature = await l2Wallet.signTypedData(domain, ORDER_TYPES, orderData);
 
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: params.price, negRisk },
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, l2Signer: l2Wallet.address },
       "Placing Polymarket order"
     );
 
@@ -401,7 +424,7 @@ export async function placePolymarketOrder(params: {
       order: {
         salt: salt.toString(),
         maker: params.walletAddress,
-        signer: params.walletAddress,
+        signer: l2Wallet.address,
         taker: "0x0000000000000000000000000000000000000000",
         tokenId: params.tokenId,
         makerAmount: makerAmount.toString(),
@@ -410,7 +433,7 @@ export async function placePolymarketOrder(params: {
         nonce: "0",
         feeRateBps: "0",
         side: "BUY",
-        signatureType: 0,
+        signatureType: 3,
         signature: orderSignature,
       },
       owner: params.walletAddress,

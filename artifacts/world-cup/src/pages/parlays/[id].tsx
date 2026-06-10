@@ -2,7 +2,8 @@ import { useRoute, useLocation } from "wouter";
 import { 
   useGetParlay, 
   useStartParlay, 
-  useDeleteParlay, 
+  useDeleteParlay,
+  useCloseParlay,
   ParlayLegStatus 
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -13,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/componen
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Play, Trash2, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Play, Trash2, ShieldAlert, XCircle, AlertTriangle } from "lucide-react";
 
 export default function ParlayDetail() {
   const [, params] = useRoute("/parlays/:id");
@@ -23,22 +24,29 @@ export default function ParlayDetail() {
   const queryClient = useQueryClient();
 
   const { data: parlay, isLoading } = useGetParlay(id, {
-    query: { queryKey: getGetParlayQueryKey(id), enabled: !!id }
+    query: { queryKey: getGetParlayQueryKey(id), enabled: !!id, refetchInterval: (q) => {
+      const status = (q.state.data as any)?.status;
+      return status === "active" ? 10000 : false;
+    }}
   });
   
   const startParlay = useStartParlay();
   const deleteParlay = useDeleteParlay();
+  const closeParlay = useCloseParlay();
 
   const handleStart = () => {
     startParlay.mutate({ parlayId: id }, {
-      onSuccess: () => {
-        toast({ title: "串关已启动", description: "首场比赛投注已下达。" });
+      onSuccess: (data) => {
+        toast({ title: "串关已启动", description: "首场比赛投注已下达，仓位已激活。" });
         queryClient.invalidateQueries({ queryKey: getGetParlayQueryKey(id) });
         queryClient.invalidateQueries({ queryKey: getGetParlaysQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetParlayStatsQueryKey() });
       },
       onError: (err: any) => {
-        toast({ title: "启动失败", description: err.message, variant: "destructive" });
+        const msg = err?.response?.data?.error || err?.message || "下单失败，请检查凭证和余额";
+        toast({ title: "启动失败 — 下单未成功", description: msg, variant: "destructive" });
+        queryClient.invalidateQueries({ queryKey: getGetParlayQueryKey(id) });
+        queryClient.invalidateQueries({ queryKey: getGetParlaysQueryKey() });
       }
     });
   };
@@ -58,12 +66,30 @@ export default function ParlayDetail() {
     }
   };
 
+  const handleClose = () => {
+    if (confirm("确定要手动关闭这个串关吗？该操作不会撤销已提交的链上订单。")) {
+      closeParlay.mutate({ parlayId: id }, {
+        onSuccess: () => {
+          toast({ title: "串关已关闭", description: "已标记为已取消。" });
+          queryClient.invalidateQueries({ queryKey: getGetParlayQueryKey(id) });
+          queryClient.invalidateQueries({ queryKey: getGetParlaysQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetParlayStatsQueryKey() });
+        },
+        onError: (err: any) => {
+          toast({ title: "关闭失败", description: err.message, variant: "destructive" });
+        }
+      });
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "draft": return <Badge variant="secondary" className="text-base py-1">草稿</Badge>;
       case "active": return <Badge variant="default" className="bg-accent text-accent-foreground text-base py-1">进行中</Badge>;
       case "won": return <Badge variant="default" className="bg-primary text-primary-foreground text-base py-1">胜利</Badge>;
       case "lost": return <Badge variant="destructive" className="text-base py-1">失败</Badge>;
+      case "error": return <Badge variant="destructive" className="text-base py-1 bg-orange-600">下单出错</Badge>;
+      case "cancelled": return <Badge variant="secondary" className="text-base py-1 opacity-60">已关闭</Badge>;
       default: return null;
     }
   };
@@ -112,18 +138,38 @@ export default function ParlayDetail() {
           </div>
         </div>
         
-        {parlay.status === "draft" && (
-          <div className="flex gap-2">
-            <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={handleDelete} disabled={deleteParlay.isPending}>
-              <Trash2 className="w-4 h-4 mr-2" /> 删除草稿
+        <div className="flex gap-2 flex-wrap">
+          {parlay.status === "draft" && (
+            <>
+              <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={handleDelete} disabled={deleteParlay.isPending}>
+                <Trash2 className="w-4 h-4 mr-2" /> 删除草稿
+              </Button>
+              <Button size="lg" className="font-bold" onClick={handleStart} disabled={startParlay.isPending}>
+                {startParlay.isPending ? "下单中…" : "启动串关"}
+                {!startParlay.isPending && <Play className="ml-2 w-4 h-4 fill-current" />}
+              </Button>
+            </>
+          )}
+          {(parlay.status === "error" || parlay.status === "active") && (
+            <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={handleClose} disabled={closeParlay.isPending}>
+              <XCircle className="w-4 h-4 mr-2" /> {closeParlay.isPending ? "关闭中…" : "手动关闭"}
             </Button>
-            <Button size="lg" className="font-bold" onClick={handleStart} disabled={startParlay.isPending}>
-              {startParlay.isPending ? "启动中..." : "启动串关"}
-              {!startParlay.isPending && <Play className="ml-2 w-4 h-4 fill-current" />}
-            </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* Error banner */}
+      {parlay.status === "error" && (
+        <div className="p-4 rounded-xl border border-orange-500/40 bg-orange-500/10 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-orange-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold text-orange-400">下单失败</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              向 Polymarket 提交订单时出错。请检查你的 API 凭证、钱包余额和签名配置，然后手动关闭此串关并重新创建。
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="border-border/50 bg-card/50">
@@ -209,6 +255,12 @@ export default function ParlayDetail() {
                       </div>
                     </div>
                   </div>
+
+                  {leg.polymarketOrderId && (
+                    <div className="mt-2 text-xs text-muted-foreground font-mono truncate" title={leg.polymarketOrderId}>
+                      订单: {leg.polymarketOrderId.slice(0, 16)}…
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

@@ -731,6 +731,54 @@ export const useStartParlay = <TError = ErrorType<unknown>,
       return useMutation(getStartParlayMutationOptions(options));
     }
 
+export const getCloseParlayUrl = (parlayId: number,) => {
+  return `/api/parlays/${parlayId}/close`
+}
+
+/**
+ * @summary Manually close (cancel) an error or active parlay
+ */
+export const closeParlay = async (parlayId: number, options?: RequestInit): Promise<ParlayWithLegs> => {
+  return customFetch<ParlayWithLegs>(getCloseParlayUrl(parlayId),
+  {
+    ...options,
+    method: 'PATCH'
+  }
+);}
+
+export const getCloseParlayMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext> => {
+const mutationKey = ['closeParlay'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof closeParlay>>, {parlayId: number}> = (props) => {
+          const {parlayId} = props ?? {};
+          return  closeParlay(parlayId, requestOptions)
+        }
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CloseParlayMutationResult = NonNullable<Awaited<ReturnType<typeof closeParlay>>>
+    export type CloseParlayMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Manually close (cancel) an error or active parlay
+ */
+export const useCloseParlay = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof closeParlay>>,
+        TError,
+        {parlayId: number},
+        TContext
+      > => {
+      return useMutation(getCloseParlayMutationOptions(options));
+    }
+
 export const getGetSettingsUrl = () => {
 
 

@@ -17,6 +17,8 @@ export default function ParlaysIndex() {
       case "active": return <Badge variant="default" className="bg-accent text-accent-foreground">进行中</Badge>;
       case "won": return <Badge variant="default" className="bg-primary text-primary-foreground">胜利</Badge>;
       case "lost": return <Badge variant="destructive">失败</Badge>;
+      case "error": return <Badge className="bg-orange-600 text-white">下单出错</Badge>;
+      case "cancelled": return <Badge variant="secondary" className="opacity-60">已关闭</Badge>;
       default: return null;
     }
   };
@@ -55,7 +57,10 @@ export default function ParlaysIndex() {
           ) : parlays && parlays.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {parlays.map((parlay) => (
-                <Card key={parlay.id} className="border-border/50 bg-card/50 hover:border-primary/50 transition-colors group cursor-pointer flex flex-col">
+                <Card key={parlay.id} className={`border-border/50 bg-card/50 hover:border-primary/50 transition-colors group cursor-pointer flex flex-col
+                  ${parlay.status === 'error' ? 'border-orange-500/40 bg-orange-500/5' : ''}
+                  ${parlay.status === 'cancelled' ? 'opacity-60' : ''}
+                `}>
                   <Link href={`/parlays/${parlay.id}`} className="flex-1 flex flex-col">
                     <CardHeader className="pb-2">
                       <div className="flex justify-between items-start mb-1 gap-2">
@@ -79,6 +84,9 @@ export default function ParlaysIndex() {
                           <div className="font-bold text-accent">${parlay.potentialPayout.toFixed(2)}</div>
                         </div>
                       </div>
+                      {parlay.status === 'error' && (
+                        <p className="text-xs text-orange-400 mt-2">⚠️ 下单失败 — 点击查看详情并手动关闭</p>
+                      )}
                     </CardContent>
                   </Link>
                 </Card>

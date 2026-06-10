@@ -1,1 +1,1 @@
-- [Polymarket CLOB API geo-block](polymarket-geo-block.md) — CLOB API 从中国大陆 IP（包括 Replit 服务器）被 Cloudflare 封锁，统一返回 "Invalid L1 Request headers"，与签名方式无关。
+- [Polymarket order signing](polymarket-signing.md) — secret IS the L2 private key (base64); use signatureType=3 (POLY_1271); fetch tick_size+neg_risk from API before each order.

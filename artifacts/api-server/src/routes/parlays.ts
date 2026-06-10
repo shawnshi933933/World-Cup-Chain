@@ -280,10 +280,50 @@ router.post("/parlays/:parlayId/start", async (req, res): Promise<void> => {
       .where(eq(parlayLegsTable.parlayId, parlayId))
       .orderBy(parlayLegsTable.legOrder);
 
+    // If order placement failed, parlay status is set to "error" by the engine
+    if (parlay?.status === "error") {
+      res.status(400).json({ error: "下单失败 — 请检查凭证和余额（Order placement failed）" });
+      return;
+    }
+
     res.json({ ...formatParlay(parlay!), legs: legs.map(formatLeg) });
   } catch (err: any) {
     req.log.error({ err }, "Failed to start parlay");
     res.status(400).json({ error: err.message || "Failed to start parlay" });
+  }
+});
+
+router.patch("/parlays/:parlayId/close", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.parlayId) ? req.params.parlayId[0] : req.params.parlayId;
+  const parlayId = parseInt(raw, 10);
+
+  if (isNaN(parlayId)) {
+    res.status(400).json({ error: "Invalid parlay ID" });
+    return;
+  }
+
+  try {
+    const [parlay] = await db.select().from(parlaysTable).where(eq(parlaysTable.id, parlayId));
+    if (!parlay) {
+      res.status(404).json({ error: "Parlay not found" });
+      return;
+    }
+
+    if (parlay.status !== "error" && parlay.status !== "active") {
+      res.status(400).json({ error: "只有错误或进行中的串关才能手动关闭 (Only error or active parlays can be closed)" });
+      return;
+    }
+
+    await db.update(parlaysTable)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(eq(parlaysTable.id, parlayId));
+
+    const [updated] = await db.select().from(parlaysTable).where(eq(parlaysTable.id, parlayId));
+    const legs = await db.select().from(parlayLegsTable).where(eq(parlayLegsTable.parlayId, parlayId)).orderBy(parlayLegsTable.legOrder);
+    res.json({ ...formatParlay(updated!), legs: legs.map(formatLeg) });
+  } catch (err: any) {
+    req.log.error({ err }, "Failed to close parlay");
+    res.status(500).json({ error: "Failed to close parlay" });
   }
 });
 
