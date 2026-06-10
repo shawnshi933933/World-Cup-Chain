@@ -365,10 +365,10 @@ export async function placePolymarketOrder(params: {
   secret: string | null | undefined;
   passphrase: string | null | undefined;
   walletAddress: string | null | undefined;
-  privateKey: string | null | undefined;
+  privateKey?: string | null | undefined;
 }): Promise<{ orderId: string } | null> {
-  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress || !params.privateKey) {
-    logger.error("placePolymarketOrder called with incomplete credentials (need apiKey, secret, passphrase, walletAddress, privateKey)");
+  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
+    logger.error("placePolymarketOrder called with incomplete credentials");
     return null;
   }
   if (params.price <= 0 || params.price >= 1) {
@@ -377,8 +377,28 @@ export async function placePolymarketOrder(params: {
   }
 
   try {
-    // L1 wallet: used for POLY_ADDRESS header and order signing
-    const l1Wallet = new ethers.Wallet(params.privateKey);
+    // Determine which wallet to use for signing and POLY_ADDRESS:
+    // - If a valid L1 private key is provided, use that (full official flow)
+    // - Otherwise derive L2 signer from secret bytes (POLY_1271 default)
+    let signerWallet: ethers.Wallet;
+    if (params.privateKey && params.privateKey.trim() && !params.privateKey.startsWith("••••")) {
+      try {
+        const pk = params.privateKey.trim().startsWith("0x") ? params.privateKey.trim() : `0x${params.privateKey.trim()}`;
+        signerWallet = new ethers.Wallet(pk);
+        logger.info({ signerAddress: signerWallet.address }, "Using L1 private key for signing");
+      } catch (pkErr) {
+        logger.warn({ pkErr }, "Invalid private key stored, falling back to L2 wallet derived from secret");
+        const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
+        const l2KeyBytes = Buffer.from(normalized, "base64");
+        signerWallet = new ethers.Wallet("0x" + l2KeyBytes.toString("hex"));
+      }
+    } else {
+      // POLY_1271: derive L2 signer from secret (secret bytes = L2 private key)
+      const normalized = params.secret.replace(/-/g, "+").replace(/_/g, "/");
+      const l2KeyBytes = Buffer.from(normalized, "base64");
+      signerWallet = new ethers.Wallet("0x" + l2KeyBytes.toString("hex"));
+      logger.info({ signerAddress: signerWallet.address }, "Using L2 wallet (derived from secret) for signing");
+    }
 
     // Fetch tick_size and neg_risk from Polymarket CLOB API
     const { tickSize, negRisk } = await fetchTokenInfo(params.tokenId);
@@ -399,8 +419,8 @@ export async function placePolymarketOrder(params: {
 
     const orderData = {
       salt,
-      maker: params.walletAddress,   // funder / deposit wallet address
-      signer: l1Wallet.address,      // L1 EOA address derived from private key
+      maker: params.walletAddress,       // funder / deposit wallet
+      signer: signerWallet.address,      // EOA that signs the order
       taker: "0x0000000000000000000000000000000000000000",
       tokenId: BigInt(params.tokenId),
       makerAmount,
@@ -409,13 +429,13 @@ export async function placePolymarketOrder(params: {
       nonce: 0n,
       feeRateBps: 0n,
       side: 0,
-      signatureType: 3,              // POLY_1271
+      signatureType: 3,                  // POLY_1271
     };
 
-    const orderSignature = await l1Wallet.signTypedData(domain, ORDER_TYPES, orderData);
+    const orderSignature = await signerWallet.signTypedData(domain, ORDER_TYPES, orderData);
 
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, l1Signer: l1Wallet.address, funder: params.walletAddress },
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, makerAmount: makerAmount.toString(), takerAmount: takerAmount.toString(), price: roundedPrice, negRisk, tickSize, signer: signerWallet.address, funder: params.walletAddress },
       "Placing Polymarket order"
     );
 
@@ -423,7 +443,7 @@ export async function placePolymarketOrder(params: {
       order: {
         salt: salt.toString(),
         maker: params.walletAddress,
-        signer: l1Wallet.address,
+        signer: signerWallet.address,
         taker: "0x0000000000000000000000000000000000000000",
         tokenId: params.tokenId,
         makerAmount: makerAmount.toString(),
@@ -453,7 +473,7 @@ export async function placePolymarketOrder(params: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "POLY_ADDRESS": l1Wallet.address,
+        "POLY_ADDRESS": signerWallet.address,
         "POLY_API_KEY": params.apiKey,
         "POLY_PASSPHRASE": params.passphrase,
         "POLY_SIGNATURE": requestSig,
