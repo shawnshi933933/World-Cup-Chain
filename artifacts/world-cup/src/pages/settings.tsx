@@ -29,21 +29,20 @@ type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-const GET_KEY_SCRIPT = `pip install py-clob-client
+const GET_KEY_SCRIPT = `pip install py-clob-client-v2
 python3 - <<'PY'
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds
+import json
+from py_clob_client_v2 import ClobClient
 
-# 替换成你的私钥（Polygon 钱包）
+# 替换成你的私钥（MetaMask 导出的那个，0x 开头）
 PRIVATE_KEY = "0x你的私钥"
-CHAIN_ID    = 137   # Polygon mainnet
 
-client = ClobClient("https://clob.polymarket.com", key=PRIVATE_KEY, chain_id=CHAIN_ID)
-creds  = client.create_or_derive_api_creds()
+client = ClobClient("https://clob.polymarket.com", key=PRIVATE_KEY, chain_id=137)
+creds  = client.create_or_derive_api_key()
 
-print("apiKey     :", creds.api_key)
-print("secret     :", creds.api_secret)
-print("passphrase :", creds.api_passphrase)
+out = creds if isinstance(creds, dict) else creds.__dict__
+print(json.dumps(out, indent=2))
+# 把 api_key / api_secret / api_passphrase 填到下方
 PY`;
 
 function CopyButton({ text }: { text: string }) {
