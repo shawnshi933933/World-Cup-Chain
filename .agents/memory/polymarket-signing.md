@@ -1,31 +1,22 @@
 ---
-name: Polymarket POLY_1271 deposit wallet signing
-description: How to correctly sign and place orders using the deposit wallet (POLY_1271) flow
+name: Polymarket order signing
+description: Working configuration for placing Polymarket CLOB orders with POLY_1271 proxy wallet setup
 ---
 
 ## Rule
 Use `@polymarket/clob-client-v2` TypeScript SDK for all order placement. Do NOT manually sign orders with ethers/viem signTypedData.
 
-**Why:** POLY_1271 orders require ERC-7739-wrapped signatures that are longer than standard ECDSA. `signTypedData` produces the wrong format. The SDK handles ERC-7739 wrapping internally.
+**Why:** POLY_1271 orders require ERC-7739-wrapped signatures. `signTypedData` produces the wrong format. The SDK handles wrapping internally.
 
-## Key address distinction
-- **EOA / owner**: `0x67fb9e2b7e59c749035e7124e8b8b9f2e9658fbd` — derived from private key; used as signing key only
-- **Deposit wallet**: `0xe6B765193A1d37E722A35338674BDAD190C69B24` — ERC-1967 proxy contract; holds pUSD; goes in both `maker` AND `signer` fields of the order
+## Working config (confirmed June 2026)
 
-## Order fields (POLY_1271)
-- `maker` = deposit wallet address
-- `signer` = deposit wallet address (SAME as maker — NOT the EOA)
-- `signatureType` = 3
-- Actual signing key = EOA private key (via viem WalletClient)
-- `POLY_ADDRESS` L2 header = EOA address (SDK sets automatically)
+- `signatureType = POLY_1271 (3)` for both TS and Python SDKs
+- `key / signer` = EOA private key
+- `funderAddress` = the Deposit/Funder wallet shown in Polymarket Settings — **NOT necessarily the wallet shown in MetaMask or UI**. Must use the address that was active when `create_or_derive_api_key()` was called.
+- No explicit `maker`/`signer` override needed in `create_and_post_order` — SDK handles correctly with funder set.
 
-## SDK usage pattern
+## TypeScript SDK pattern
 ```typescript
-import { ClobClient, OrderType, Side, SignatureTypeV2 } from "@polymarket/clob-client-v2";
-import { createWalletClient, http } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { polygon } from "viem/chains";
-
 const account = privateKeyToAccount(eoaPrivateKey);
 const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
 
@@ -35,28 +26,64 @@ const clob = new ClobClient({
   signer: walletClient as any,
   creds: { key, secret, passphrase },
   signatureType: SignatureTypeV2.POLY_1271,
-  funderAddress: depositWalletAddress,  // 0xe6B765...
+  funderAddress: depositWalletAddress,
 });
 
 const result = await clob.createAndPostOrder(
   { tokenID, price, size, side: Side.BUY },
-  { tickSize, negRisk },
+  { tickSize: tickSize.toString(), negRisk },
   OrderType.GTC,
 );
+// result.orderID, result.success, result.status === 'live'
+```
+
+## Python SDK pattern (py_clob_client_v2)
+```python
+client = ClobClient(host, key=PRIVATE_KEY, chain_id=137,
+                    creds=creds, signature_type=SignatureTypeV2.POLY_1271, funder=DEPOSIT_WALLET)
+resp = client.create_and_post_order(
+    order_args=OrderArgs(token_id=TOKEN, price=0.69, size=5, side=Side.BUY),
+    options=PartialCreateOrderOptions(
+        tick_size=client.get_tick_size(TOKEN),
+        neg_risk=client.get_neg_risk(TOKEN)
+    ),
+    order_type=OrderType.GTC
+)
+# Success: {'errorMsg': '', 'orderID': '0x...', 'status': 'live', 'success': True}
+```
+
+## API key derivation
+```python
+temp = ClobClient(host, key=PK, chain_id=137,
+                  signature_type=SignatureTypeV2.POLY_1271, funder=DEPOSIT_WALLET)
+creds = temp.create_or_derive_api_key()  # returns ApiCreds object (not dict)
+# Use creds.api_key, creds.api_secret, creds.api_passphrase
 ```
 
 ## Size units
-`size` parameter = conditional tokens to buy = `sizeUsdc / price` (NOT USDC amount directly)
+`size` = conditional tokens to buy = `sizeUsdc / price` (NOT the USDC amount directly)
+
+## Token IDs
+Large decimal integers — NO `0x` prefix. Fetch from DB:
+`SELECT title, outcomes FROM markets_cache WHERE title ILIKE '%team%';`
+The `outcomes` JSONB column has `tokenId` per outcome.
+
+## Common errors
+| Error | Cause | Fix |
+|-------|-------|-----|
+| "the order signer address has to be the address of the API KEY" | Wrong funder address or signature_type | Use POLY_1271 + correct funder wallet |
+| "market not found" on /tick-size | Wrong token_id (0x prefix added) | Token IDs are pure decimal |
+| "Invalid asset type" on get_balance_allowance | Missing param | Pass `params={"asset_type": COLLATERAL}` |
+| `ClobClient` has no attribute 'key' | SDK v2 doesn't expose .key | Derive EOA address via eth_account separately |
 
 ## DB column
-Settings table needs `polymarket_private_key TEXT`. On new DBs run:
+Settings table needs `polymarket_private_key TEXT`:
 `ALTER TABLE settings ADD COLUMN IF NOT EXISTS polymarket_private_key TEXT;`
 
 ## Tick size / neg_risk
-Still fetch from CLOB API per token before placing:
+Fetch per token before placing — use SDK `clob.getTickSize(tokenID)` / `clob.getNegRisk(tokenID)` with fallback to manual HTTP:
 - `GET https://clob.polymarket.com/tick-size?token_id=...`
 - `GET https://clob.polymarket.com/neg-risk?token_id=...`
-Round price to nearest tick or get INVALID_ORDER_MIN_TICK_SIZE error.
 
-## balance-allowance endpoint
+## balance-allowance
 `updateBalanceAllowance` may be geo-blocked from HK (403). Wrap in try-catch; orders can still succeed if balance was previously synced.

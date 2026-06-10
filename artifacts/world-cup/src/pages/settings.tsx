@@ -34,10 +34,9 @@ python3 - <<'PY'
 import json
 from py_clob_client_v2 import ClobClient, SignatureTypeV2
 
-# 替换成你的 EOA 私钥（MetaMask 导出的那个，0x 开头）
-PRIVATE_KEY    = "0x你的私钥"
-# Deposit wallet 地址（Polymarket 充值页面显示的那个地址）
-DEPOSIT_WALLET = "0xe6B765193A1d37E722A35338674BDAD190C69B24"
+# ⚠️ 替换成你自己的值（不要分享给任何人）
+PRIVATE_KEY    = "0x你的私钥"         # Polymarket Settings → Export Private Key
+DEPOSIT_WALLET = "0x你的Funder地址"   # Polymarket Settings 页面显示的 Deposit/Funder 地址
 
 client = ClobClient(
     "https://clob.polymarket.com",
@@ -49,8 +48,9 @@ client = ClobClient(
 creds = client.create_or_derive_api_key()
 
 out = creds if isinstance(creds, dict) else creds.__dict__
-print(json.dumps(out, indent=2))
-# 把输出的 api_key / api_secret / api_passphrase 填到设置页面
+print(json.dumps(out, indent=2, default=str))
+# 把输出的 api_key / api_secret / api_passphrase 填到下方
+# Wallet 地址填 DEPOSIT_WALLET 那个值（Funder 地址）
 PY`;
 
 function CopyButton({ text }: { text: string }) {

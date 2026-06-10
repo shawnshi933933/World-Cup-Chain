@@ -333,8 +333,8 @@ export async function placePolymarketOrder(params: {
   apiKey: string | null | undefined;
   secret: string | null | undefined;
   passphrase: string | null | undefined;
-  walletAddress: string | null | undefined;  // deposit wallet address (0xe6B765...)
-  privateKey?: string | null | undefined;     // EOA owner private key (signs on behalf of deposit wallet)
+  walletAddress: string | null | undefined;  // funder/deposit wallet address
+  privateKey?: string | null | undefined;     // EOA private key (signs orders)
 }): Promise<{ orderId: string } | null> {
   if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
     logger.error("placePolymarketOrder: incomplete credentials");
@@ -367,8 +367,6 @@ export async function placePolymarketOrder(params: {
       passphrase: params.passphrase,
     };
 
-    // maker = signer = deposit wallet address (per POLY_1271 docs)
-    // actual signing key = EOA account (owner of deposit wallet)
     const clob = new ClobClient({
       host: "https://clob.polymarket.com",
       chain: 137,
@@ -378,13 +376,29 @@ export async function placePolymarketOrder(params: {
       funderAddress: params.walletAddress,
     });
 
-    const { tickSize, negRisk } = await fetchTokenInfo(params.tokenId);
+    // Fetch token info via SDK (falls back to manual HTTP if SDK fails)
+    let tickSize = 0.01;
+    let negRisk = false;
+    try {
+      const [tickData, negRiskData] = await Promise.all([
+        clob.getTickSize(params.tokenId) as Promise<any>,
+        clob.getNegRisk(params.tokenId) as Promise<any>,
+      ]);
+      tickSize = parseFloat(tickData?.minimum_tick_size ?? tickData?.tick_size ?? tickData ?? "0.01");
+      negRisk = typeof negRiskData === "boolean" ? negRiskData : !!(negRiskData?.neg_risk ?? negRiskData?.negRisk ?? false);
+      if (isNaN(tickSize) || tickSize <= 0) tickSize = 0.01;
+    } catch {
+      const fallback = await fetchTokenInfo(params.tokenId);
+      tickSize = fallback.tickSize;
+      negRisk = fallback.negRisk;
+    }
+
     const roundedPrice = roundToTick(params.price, tickSize);
-    // size = conditional tokens to buy = USDC / price
+    // size in tokens = USDC budget / price per token
     const sizeTokens = params.sizeUsdc / roundedPrice;
 
     logger.info(
-      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, signer: account.address, depositWallet: params.walletAddress },
+      { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, signer: account.address, funder: params.walletAddress },
       "Placing Polymarket order via SDK (POLY_1271)"
     );
 
@@ -399,7 +413,7 @@ export async function placePolymarketOrder(params: {
       logger.error({ result }, "Polymarket SDK order: missing orderId in response");
       return null;
     }
-    logger.info({ orderId }, "Polymarket order placed successfully");
+    logger.info({ orderId, status: result?.status }, "Polymarket order placed successfully");
     return { orderId: orderId.toString() };
   } catch (err) {
     logger.error({ err }, "Failed to place Polymarket order via SDK");
