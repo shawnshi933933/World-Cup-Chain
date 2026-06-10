@@ -273,7 +273,8 @@ export const UpdateSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean()
+  "hasPassphrase": zod.boolean(),
+  "hasPrivateKey": zod.boolean().optional()
 })
 
 

@@ -14,4 +14,5 @@ export interface Settings {
   hasApiKey: boolean;
   hasSecret: boolean;
   hasPassphrase: boolean;
+  hasPrivateKey: boolean;
 }

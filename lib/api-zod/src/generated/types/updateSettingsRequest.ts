@@ -14,4 +14,6 @@ export interface UpdateSettingsRequest {
   /** Polymarket L2 API passphrase */
   polymarketPassphrase?: string | null;
   walletAddress?: string | null;
+  /** Polygon L1 private key for order signing and POLY_ADDRESS header */
+  polymarketPrivateKey?: string | null;
 }

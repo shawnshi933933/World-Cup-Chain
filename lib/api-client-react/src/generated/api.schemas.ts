@@ -150,6 +150,7 @@ export interface Settings {
   hasApiKey: boolean;
   hasSecret: boolean;
   hasPassphrase: boolean;
+  hasPrivateKey: boolean;
 }
 
 export interface UpdateSettingsRequest {
@@ -160,6 +161,8 @@ export interface UpdateSettingsRequest {
   /** Polymarket L2 API passphrase */
   polymarketPassphrase?: string | null;
   walletAddress?: string | null;
+  /** Polygon L1 private key for order signing and POLY_ADDRESS header */
+  polymarketPrivateKey?: string | null;
 }
 
 export type GetMarketsParams = {

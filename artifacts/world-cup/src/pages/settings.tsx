@@ -22,6 +22,7 @@ const settingsSchema = z.object({
   polymarketSecret: z.string().optional(),
   polymarketPassphrase: z.string().optional(),
   walletAddress: z.string().optional(),
+  polymarketPrivateKey: z.string().optional(),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
@@ -101,6 +102,7 @@ export default function SettingsPage() {
       polymarketSecret: "",
       polymarketPassphrase: "",
       walletAddress: "",
+      polymarketPrivateKey: "",
     }
   });
 
@@ -112,6 +114,7 @@ export default function SettingsPage() {
         polymarketSecret: settings.hasSecret ? "••••••••" : "",
         polymarketPassphrase: settings.hasPassphrase ? "••••••••" : "",
         walletAddress: settings.walletAddress || "",
+        polymarketPrivateKey: settings.hasPrivateKey ? "••••••••" : "",
       });
     }
   }, [settings, form]);
@@ -126,6 +129,9 @@ export default function SettingsPage() {
     }
     if (data.polymarketPassphrase && !data.polymarketPassphrase.startsWith("••••")) {
       payload.polymarketPassphrase = data.polymarketPassphrase;
+    }
+    if (data.polymarketPrivateKey && !data.polymarketPrivateKey.startsWith("••••")) {
+      payload.polymarketPrivateKey = data.polymarketPrivateKey;
     }
 
     updateSettings.mutate({ data: payload }, {
@@ -326,7 +332,7 @@ export default function SettingsPage() {
                   <FormItem>
                     <FormLabel className="flex items-center gap-2">
                       <Wallet className="w-4 h-4 text-muted-foreground" />
-                      钱包地址
+                      存款钱包地址（Deposit Wallet / Funder）
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -337,7 +343,37 @@ export default function SettingsPage() {
                       />
                     </FormControl>
                     <FormDescription>
-                      用于接收派发的奖金。
+                      Polymarket 设置页里的资金地址（持有 USDC 的那个）。
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="polymarketPrivateKey"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <Key className="w-4 h-4 text-red-400" />
+                      Polygon 私钥（PRIVATE_KEY）
+                      <span className="ml-1 text-xs font-normal text-red-400">高度敏感</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="0x..."
+                        type="password"
+                        autoComplete="off"
+                        {...field}
+                        className="font-mono bg-background border-red-500/30 focus-visible:ring-red-500/50"
+                      />
+                    </FormControl>
+                    {settings?.hasPrivateKey && (
+                      <FormDescription className="text-green-500">✓ 已配置</FormDescription>
+                    )}
+                    <FormDescription className="text-red-400/80">
+                      ⚠️ 私钥仅存于你的服务器，用于签署每笔 Polymarket 订单（POLY_ADDRESS + EIP-712 签名）。
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
