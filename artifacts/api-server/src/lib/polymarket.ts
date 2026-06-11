@@ -444,32 +444,45 @@ export async function placePolymarketOrder(params: {
   }
 }
 
-const USDC_POLYGON_BRIDGED = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" as const;
-const USDC_POLYGON_NATIVE  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as const;
-const USDC_DECIMALS = 6;
-const ERC20_BALANCE_ABI = [{
-  inputs: [{ name: "account", type: "address" }],
-  name: "balanceOf",
-  outputs: [{ name: "", type: "uint256" }],
-  stateMutability: "view",
-  type: "function",
-}] as const;
-
-/** Read on-chain USDC balance of the deposit wallet (both bridged + native, sum). */
-export async function getWalletBalanceUsdc(walletAddress: string): Promise<number> {
+/**
+ * Fetch the Polymarket CLOB USDC balance (cash available for trading).
+ * Uses authenticated CLOB API — NOT on-chain ERC20 balance, which is always 0
+ * because Polymarket holds funds inside their exchange contract.
+ */
+export async function getWalletBalanceUsdc(params: {
+  apiKey: string;
+  secret: string;
+  passphrase: string;
+  walletAddress: string;
+  privateKey?: string;
+}): Promise<number> {
   try {
-    const { createPublicClient } = await import("viem");
-    const publicClient = createPublicClient({ chain: polygon, transport: http() });
-    const addr = walletAddress as `0x${string}`;
-    const [b1, b2] = await Promise.all([
-      publicClient.readContract({ address: USDC_POLYGON_BRIDGED, abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [addr] }).catch(() => 0n),
-      publicClient.readContract({ address: USDC_POLYGON_NATIVE,  abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [addr] }).catch(() => 0n),
-    ]);
-    const total = Number(b1 + b2) / 10 ** USDC_DECIMALS;
-    logger.debug({ walletAddress, total }, "Fetched on-chain USDC balance");
-    return total;
+    if (!params.privateKey) {
+      logger.warn({ walletAddress: params.walletAddress }, "No private key — cannot authenticate with CLOB to fetch balance");
+      return 0;
+    }
+    const pk = (params.privateKey.trim().startsWith("0x")
+      ? params.privateKey.trim()
+      : `0x${params.privateKey.trim()}`) as Hex;
+
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
+
+    const clob = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer: walletClient as any,
+      creds: { key: params.apiKey, secret: params.secret, passphrase: params.passphrase },
+      signatureType: SignatureTypeV2.POLY_1271,
+      funderAddress: params.walletAddress,
+    });
+
+    const result = await clob.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }) as any;
+    const balance = parseFloat(result?.balance ?? result?.allowance ?? "0");
+    logger.debug({ walletAddress: params.walletAddress, balance, raw: result }, "Fetched CLOB USDC balance");
+    return isNaN(balance) ? 0 : balance;
   } catch (err) {
-    logger.warn({ err, walletAddress }, "Failed to fetch on-chain USDC balance");
+    logger.warn({ err, walletAddress: params.walletAddress }, "Failed to fetch CLOB USDC balance");
     return 0;
   }
 }

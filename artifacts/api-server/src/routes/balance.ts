@@ -11,7 +11,7 @@ router.get("/balance", async (req, res): Promise<void> => {
       res.json({ balanceUsdc: null, walletAddress: null });
       return;
     }
-    const balanceUsdc = await getWalletBalanceUsdc(creds.walletAddress);
+    const balanceUsdc = await getWalletBalanceUsdc(creds);
     res.json({ balanceUsdc, walletAddress: creds.walletAddress });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch balance" });

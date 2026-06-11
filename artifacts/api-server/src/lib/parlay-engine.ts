@@ -147,7 +147,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
     // This is the correct baseline: USDC has already been deducted, so when the
     // payout arrives later the delta accurately represents the winnings only.
     if (creds.walletAddress) {
-      const balanceAfterOrders = await getWalletBalanceUsdc(creds.walletAddress);
+      const balanceAfterOrders = await getWalletBalanceUsdc(creds);
       await db.update(parlaysTable)
         .set({ balanceSnapshotUsdc: balanceAfterOrders.toString(), updatedAt: new Date() })
         .where(eq(parlaysTable.id, parlayId));
@@ -175,7 +175,7 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
     if (!creds?.walletAddress) return;
 
     const minBet = await resolveMinBetUsdc();
-    const currentBalance = await getWalletBalanceUsdc(creds.walletAddress);
+    const currentBalance = await getWalletBalanceUsdc(creds);
     const snapshotBalance = parseFloat(parlay.balanceSnapshotUsdc);
     const delta = currentBalance - snapshotBalance;
 
@@ -328,7 +328,7 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
     if (!parlay.balanceSnapshotUsdc) {
       const creds = await resolvePolymarketCredentials();
       if (creds?.walletAddress) {
-        const balanceNow = await getWalletBalanceUsdc(creds.walletAddress);
+        const balanceNow = await getWalletBalanceUsdc(creds);
         extraUpdate.balanceSnapshotUsdc = balanceNow.toString();
         logger.warn({ parlayId, balanceNow }, "Balance snapshot missing — taking fallback snapshot at win detection");
       }
