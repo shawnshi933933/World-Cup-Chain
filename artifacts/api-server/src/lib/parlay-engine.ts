@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { db, parlaysTable, parlayLegsTable } from "@workspace/db";
 import { checkMarketResolution, placePolymarketOrderWithRetry, getWalletBalanceUsdc } from "./polymarket";
 import { resolvePolymarketCredentials, resolveMinBetUsdc } from "./credentials";
@@ -152,10 +152,15 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
         setTimeout(async () => {
           try {
             const balance = await getWalletBalanceUsdc(credsCopy);
-            await db.update(parlaysTable)
+            const result = await db.update(parlaysTable)
               .set({ balanceSnapshotUsdc: balance.toString(), updatedAt: new Date() })
-              .where(eq(parlaysTable.id, parlayId));
-            logger.info({ parlayId, delayMin, balanceSnapshot: balance }, "Balance snapshot taken");
+              .where(and(eq(parlaysTable.id, parlayId), isNull(parlaysTable.balanceSnapshotUsdc)))
+              .returning({ id: parlaysTable.id });
+            if (result.length > 0) {
+              logger.info({ parlayId, delayMin, balanceSnapshot: balance }, "Balance snapshot taken");
+            } else {
+              logger.debug({ parlayId, delayMin }, "Balance snapshot skipped — already set by earlier read");
+            }
           } catch (err) {
             logger.warn({ err, parlayId, delayMin }, "Balance snapshot failed — fallback triggers at win detection");
           }
