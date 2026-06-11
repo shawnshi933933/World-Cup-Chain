@@ -549,40 +549,50 @@ export async function placePolymarketOrderWithRetry(params: {
   for (let attempt = 0; attempt < maxRetries && remainingUsdc >= 1; attempt++) {
     if (attempt > 0) {
       await new Promise(r => setTimeout(r, retryDelaySec * 1000));
-      logger.info({ attempt, remainingUsdc }, `IOC top-up attempt ${attempt + 1}/${maxRetries}`);
+      logger.info({ attempt, remainingUsdc }, `GTC top-up attempt ${attempt + 1}/${maxRetries}`);
     }
 
-    // Fetch current best ask fresh each attempt — orderbook may have changed
+    // GTC aggressive limit: best ask + 2 cents, sweeps the book up to this price.
+    // Unfilled remainder stays as a maker order — we cancel it immediately after.
     const bestAsk = await getBestAskPrice(params.tokenId, params.price);
-    const roundedPrice = roundToTick(bestAsk, tickSize);
-    const sizeTokens = remainingUsdc / roundedPrice;
+    const aggressivePrice = Math.min(roundToTick(bestAsk + 0.02, tickSize), 0.99);
+    const sizeTokens = remainingUsdc / bestAsk; // size based on best ask, not limit price
 
     logger.info(
-      { tokenId: params.tokenId, remainingUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, attempt },
-      "Placing IOC order"
+      { tokenId: params.tokenId, remainingUsdc, sizeTokens, bestAsk, aggressivePrice, negRisk, tickSize, attempt },
+      "Placing GTC aggressive order"
     );
 
     try {
       const result = await clob.createAndPostOrder(
-        { tokenID: params.tokenId, price: roundedPrice, size: sizeTokens, side: Side.BUY },
+        { tokenID: params.tokenId, price: aggressivePrice, size: sizeTokens, side: Side.BUY },
         { tickSize: tickSize.toString(), negRisk },
-        OrderType.IOC,
+        OrderType.GTC,
       ) as any;
 
       const orderId = result?.orderID || result?.orderId || result?.order?.id;
       if (orderId) orderIds.push(orderId.toString());
 
-      // IOC response uses takingAmount (tokens received) + makingAmount (USDC spent).
-      // size_matched is only on OpenOrder/GTC responses, NOT on IOC createAndPostOrder.
+      // Parse fill: takingAmount = tokens received, makingAmount = USDC spent
       const takingAmount = parseFloat(result?.takingAmount ?? "0");
       const makingAmount = parseFloat(result?.makingAmount ?? "0");
-      // Prefer makingAmount (direct USDC); fall back to tokens × price
-      const filledUsdc = makingAmount > 0 ? makingAmount : (takingAmount > 0 ? takingAmount * roundedPrice : 0);
+      const filledUsdc = makingAmount > 0 ? makingAmount : (takingAmount > 0 ? takingAmount * bestAsk : 0);
 
       logger.info(
         { orderId, takingAmount, makingAmount, filledUsdc, remainingUsdc, status: result?.status },
-        "IOC order result"
+        "GTC aggressive order result"
       );
+
+      // Cancel unfilled remainder so it doesn't linger on the book
+      if (orderId) {
+        try {
+          await clob.cancelOrder({ orderID: orderId });
+          logger.info({ orderId }, "Cancelled GTC order remainder");
+        } catch (cancelErr) {
+          // Already fully filled or cancel failed — not critical
+          logger.warn({ orderId, cancelErr }, "GTC cancel attempt failed (may already be fully filled)");
+        }
+      }
 
       if (filledUsdc > 0) {
         totalFilledUsdc += filledUsdc;
@@ -590,11 +600,11 @@ export async function placePolymarketOrderWithRetry(params: {
         if (remainingUsdc < 0.01) break;
       } else {
         // Nothing filled — orderbook empty or price mismatch; stop retrying
-        logger.warn({ tokenId: params.tokenId, attempt, rawResult: result }, "IOC order filled nothing — stopping retries");
+        logger.warn({ tokenId: params.tokenId, attempt }, "GTC order filled nothing — stopping retries");
         break;
       }
     } catch (err) {
-      logger.error({ err, attempt }, "IOC order placement error — stopping retries");
+      logger.error({ err, attempt }, "GTC order placement error — stopping retries");
       break;
     }
   }
