@@ -1,12 +1,12 @@
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db, parlaysTable, parlayLegsTable } from "@workspace/db";
-import { checkMarketResolution, placePolymarketOrderWithRetry, getWalletBalanceUsdc } from "./polymarket";
+import { checkMarketResolution, placePolymarketOrderWithRetry, redeemWinningPosition } from "./polymarket";
 import { resolvePolymarketCredentials, resolveMinBetUsdc } from "./credentials";
 import { logger } from "./logger";
 
 const GAS_FEE_USDC = 0.01;
-// After payoutWaitSince is reached, retry delta check up to 3 times (every ~10 min, 30 min total)
-const PAYOUT_RETRY_WINDOW_MS = 30 * 60 * 1000;
+// Delay between relayer redeem call and placing the next leg (let chain settle)
+const REDEEM_SETTLE_DELAY_MS = 90 * 1000;
 
 type SelectedOutcome = {
   name: string;
@@ -144,30 +144,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
       })
       .where(eq(parlayLegsTable.id, leg.id));
 
-    // Take 3 balance snapshots at T+10, T+20, T+30 min (fire-and-forget, each overwrites previous).
-    // Multiple reads guard against transient API errors; delay ensures CLOB reflects deduction.
-    if (creds.walletAddress) {
-      const credsCopy = { ...creds };
-      for (const delayMin of [10, 20, 30]) {
-        setTimeout(async () => {
-          try {
-            const balance = await getWalletBalanceUsdc(credsCopy);
-            const result = await db.update(parlaysTable)
-              .set({ balanceSnapshotUsdc: balance.toString(), updatedAt: new Date() })
-              .where(and(eq(parlaysTable.id, parlayId), isNull(parlaysTable.balanceSnapshotUsdc)))
-              .returning({ id: parlaysTable.id });
-            if (result.length > 0) {
-              logger.info({ parlayId, delayMin, balanceSnapshot: balance }, "Balance snapshot taken");
-            } else {
-              logger.debug({ parlayId, delayMin }, "Balance snapshot skipped — already set by earlier read");
-            }
-          } catch (err) {
-            logger.warn({ err, parlayId, delayMin }, "Balance snapshot failed — fallback triggers at win detection");
-          }
-        }, delayMin * 60 * 1000);
-      }
-      logger.info({ parlayId }, "Balance snapshots scheduled at T+10, T+20, T+30 min");
-    }
+    // No balance snapshot needed — payout is now handled via Relayer redeem at win detection.
   }
 }
 
@@ -175,43 +152,19 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   const [parlay] = await db.select().from(parlaysTable).where(eq(parlaysTable.id, parlayId));
   if (!parlay || parlay.status !== "active") return;
 
-  // PHASE A: Wait until payoutWaitSince (= matchEndDate + 10 min), then check delta.
-  // Retries every ~60s for up to 30 min (3 × 10-min windows). Gives up after that.
-  if (!parlay.simulationMode && parlay.payoutWaitSince && parlay.balanceSnapshotUsdc) {
+  // PHASE A: After relayer redeem, wait REDEEM_SETTLE_DELAY_MS then advance to next leg.
+  // payoutWaitSince = the timestamp at which we should proceed (set at win detection).
+  // currentAmount is already set to theoreticalPayout by the win handler.
+  if (!parlay.simulationMode && parlay.payoutWaitSince) {
     const now = Date.now();
-    const checkAt = parlay.payoutWaitSince.getTime();
+    const proceedAt = parlay.payoutWaitSince.getTime();
 
-    // Not time yet — skip silently until match end + 10 min
-    if (now < checkAt) {
-      logger.debug({ parlayId, waitMs: checkAt - now }, "Payout check not due yet — skipping");
+    if (now < proceedAt) {
+      logger.debug({ parlayId, waitMs: proceedAt - now }, "Waiting for redeem settlement — skipping");
       return;
     }
 
-    const elapsedSinceCheckAt = now - checkAt;
-    if (elapsedSinceCheckAt > PAYOUT_RETRY_WINDOW_MS) {
-      logger.error({ parlayId, elapsedMs: elapsedSinceCheckAt }, "Payout delta not detected after 30 min retries — marking as error");
-      await db.update(parlaysTable)
-        .set({ status: "error", balanceSnapshotUsdc: null, payoutWaitSince: null, updatedAt: new Date() })
-        .where(eq(parlaysTable.id, parlayId));
-      return;
-    }
-
-    const creds = await resolvePolymarketCredentials();
-    if (!creds?.walletAddress) return;
-
-    const minBet = await resolveMinBetUsdc();
-    const currentBalance = await getWalletBalanceUsdc(creds);
-    const snapshotBalance = parseFloat(parlay.balanceSnapshotUsdc);
-    const delta = currentBalance - snapshotBalance;
-
-    logger.info({ parlayId, currentBalance, snapshotBalance, delta, minBet, elapsedSinceCheckAt }, "Checking payout delta");
-
-    if (delta < minBet) {
-      logger.info({ parlayId, delta, minBet }, "Delta not yet sufficient — will retry next poll");
-      return;
-    }
-
-    logger.info({ parlayId, delta }, "Payout confirmed — advancing to next leg");
+    logger.info({ parlayId, currentAmount: parlay.currentAmount }, "Redeem settle delay passed — advancing to next leg");
     const nextLegIndex = parlay.currentLegIndex + 1;
     const allLegs = await db.select().from(parlayLegsTable)
       .where(eq(parlayLegsTable.parlayId, parlayId))
@@ -220,10 +173,8 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
 
     await db.update(parlaysTable)
       .set({
-        currentAmount: delta.toString(),
         currentLegIndex: nextLegIndex,
         status: isLastLeg ? "won" : "active",
-        balanceSnapshotUsdc: null,
         payoutWaitSince: null,
         updatedAt: new Date(),
       })
@@ -346,35 +297,35 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
       await executeNextLeg(parlayId);
     }
   } else {
-    // Real mode — set payoutWaitSince to matchEndDate + 10 min so we only start
-    // checking the delta after the match has ended and Polymarket has had time to settle.
+    // Real mode — call Relayer API to redeem winning position (gasless, same as web "Claim" button).
+    // Then wait REDEEM_SETTLE_DELAY_MS for the chain to settle before placing the next leg.
     const creds = await resolvePolymarketCredentials();
-    let extraUpdate: Record<string, any> = {};
 
-    // Fallback snapshot if scheduled setTimeouts were lost (e.g. pm2 restart)
-    if (!parlay.balanceSnapshotUsdc) {
-      if (creds?.walletAddress) {
-        const balanceNow = await getWalletBalanceUsdc(creds);
-        extraUpdate.balanceSnapshotUsdc = balanceNow.toString();
-        logger.warn({ parlayId, balanceNow }, "Balance snapshot missing — taking fallback snapshot at win detection");
-      }
+    // Store theoreticalPayout as currentAmount so PHASE A uses it for the next leg stake
+    const proceedAt = new Date(Date.now() + REDEEM_SETTLE_DELAY_MS);
+    await db.update(parlaysTable)
+      .set({
+        currentAmount: theoreticalPayout.toString(),
+        payoutWaitSince: proceedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(parlaysTable.id, parlayId));
+
+    // Fire-and-forget relayer call — failure is non-fatal (chain may settle on its own)
+    if (creds?.relayerApiKey && creds?.relayerKeyAddress && creds?.walletAddress) {
+      redeemWinningPosition({
+        conditionId: leg.marketId,
+        funderAddress: creds.walletAddress,
+        relayerApiKey: creds.relayerApiKey,
+        relayerKeyAddress: creds.relayerKeyAddress,
+      }).then(ok => {
+        if (!ok) logger.warn({ parlayId }, "Relayer redeem returned false — next leg will still be attempted after delay");
+      }).catch(err => logger.error({ err, parlayId }, "Relayer redeem threw unexpectedly"));
+    } else {
+      logger.warn({ parlayId }, "Relayer API key not configured — skipping redeem call, next leg proceeds after delay");
     }
 
-    // payoutWaitSince = matchEndDate + 10 min (or now + 10 min if no end date)
-    const matchEndDate = leg.marketEndDate ? new Date(leg.marketEndDate) : new Date();
-    const payoutCheckAt = new Date(matchEndDate.getTime() + 10 * 60 * 1000);
-    // If the match has already ended, check 10 min from now instead
-    const effectiveCheckAt = payoutCheckAt < new Date()
-      ? new Date(Date.now() + 10 * 60 * 1000)
-      : payoutCheckAt;
-
-    await db.update(parlaysTable)
-      .set({ payoutWaitSince: effectiveCheckAt, updatedAt: new Date(), ...extraUpdate })
-      .where(eq(parlaysTable.id, parlayId));
-    logger.info(
-      { parlayId, payoutCheckAt: effectiveCheckAt, balanceSnapshot: parlay.balanceSnapshotUsdc ?? extraUpdate.balanceSnapshotUsdc },
-      "Leg won (real mode) — delta check scheduled"
-    );
+    logger.info({ parlayId, theoreticalPayout, proceedAt }, "Leg won (real mode) — redeem initiated, next leg scheduled");
   }
 }
 

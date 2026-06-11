@@ -604,6 +604,44 @@ export async function placePolymarketOrderWithRetry(params: {
   return { orderIds, totalFilledUsdc };
 }
 
+/**
+ * Call Polymarket's Relayer API to redeem a winning position (gasless).
+ * This is the same call the web UI's "Claim" button makes.
+ * Requires a Relayer API Key created in Polymarket account settings.
+ */
+export async function redeemWinningPosition(params: {
+  conditionId: string;
+  funderAddress: string;
+  relayerApiKey: string;
+  relayerKeyAddress: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch("https://relayer-v2.polymarket.com/redeem", {
+      method: "POST",
+      headers: {
+        "RELAYER_API_KEY": params.relayerApiKey,
+        "RELAYER_API_KEY_ADDRESS": params.relayerKeyAddress,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        conditionId: params.conditionId,
+        funder: params.funderAddress,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json().catch(() => ({})) as any;
+    if (!res.ok) {
+      logger.error({ conditionId: params.conditionId, status: res.status, data }, "Relayer redeem failed");
+      return false;
+    }
+    logger.info({ conditionId: params.conditionId, data }, "Relayer redeem succeeded");
+    return true;
+  } catch (err) {
+    logger.error({ err, conditionId: params.conditionId }, "Relayer redeem threw");
+    return false;
+  }
+}
+
 export async function syncPolymarketBalance(params: {
   apiKey: string;
   secret: string;
