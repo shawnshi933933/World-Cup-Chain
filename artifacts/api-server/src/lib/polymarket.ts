@@ -1,5 +1,20 @@
 import { logger } from "./logger";
-import { createWalletClient, http, type Hex } from "viem";
+import { createWalletClient, createPublicClient, http, type Hex } from "viem";
+
+const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045" as const;
+const COLLATERAL_ADDRESS = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB" as const;
+const CTF_REDEEM_ABI = [{
+  name: "redeemPositions",
+  type: "function" as const,
+  inputs: [
+    { name: "collateralToken", type: "address" },
+    { name: "parentCollectionId", type: "bytes32" },
+    { name: "conditionId", type: "bytes32" },
+    { name: "indexSets", type: "uint256[]" },
+  ],
+  outputs: [],
+  stateMutability: "nonpayable",
+}];
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import {
@@ -646,39 +661,48 @@ export async function placePolymarketOrderWithRetry(params: {
 }
 
 /**
- * Call Polymarket's Relayer API to redeem a winning position (gasless).
- * This is the same call the web UI's "Claim" button makes.
- * Requires a Relayer API Key created in Polymarket account settings.
+ * Redeem a winning CTF position directly on-chain via the Polymarket CTF contract.
+ * Replaces the defunct Relayer API approach. Requires MATIC in the wallet for gas
+ * (Polygon gas is cheap — ~0.01 MATIC per redemption).
  */
 export async function redeemWinningPosition(params: {
   conditionId: string;
-  funderAddress: string;
-  relayerApiKey: string;
-  relayerKeyAddress: string;
+  privateKey: string;
 }): Promise<boolean> {
   try {
-    const res = await fetch("https://relayer-v2.polymarket.com/redeem", {
-      method: "POST",
-      headers: {
-        "RELAYER_API_KEY": params.relayerApiKey,
-        "RELAYER_API_KEY_ADDRESS": params.relayerKeyAddress,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        conditionId: params.conditionId,
-        funder: params.funderAddress,
-      }),
-      signal: AbortSignal.timeout(15000),
+    const pk = (params.privateKey.trim().startsWith("0x")
+      ? params.privateKey.trim()
+      : `0x${params.privateKey.trim()}`) as Hex;
+
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
+    const publicClient = createPublicClient({ chain: polygon, transport: http() });
+
+    const conditionId = (params.conditionId.startsWith("0x")
+      ? params.conditionId
+      : `0x${params.conditionId}`) as Hex;
+
+    logger.info({ conditionId, wallet: account.address }, "Calling CTF.redeemPositions on-chain");
+
+    const txHash = await walletClient.writeContract({
+      address: CTF_ADDRESS,
+      abi: CTF_REDEEM_ABI,
+      functionName: "redeemPositions",
+      args: [COLLATERAL_ADDRESS, `0x${"0".repeat(64)}` as Hex, conditionId, [1n]],
     });
-    const data = await res.json().catch(() => ({})) as any;
-    if (!res.ok) {
-      logger.error({ conditionId: params.conditionId, status: res.status, data }, "Relayer redeem failed");
+
+    logger.info({ conditionId, txHash }, "CTF redeemPositions tx submitted — waiting for receipt");
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 });
+
+    if (receipt.status === "success") {
+      logger.info({ conditionId, txHash }, "CTF redeemPositions confirmed on-chain");
+      return true;
+    } else {
+      logger.error({ conditionId, txHash, receipt }, "CTF redeemPositions tx reverted");
       return false;
     }
-    logger.info({ conditionId: params.conditionId, data }, "Relayer redeem succeeded");
-    return true;
   } catch (err) {
-    logger.error({ err, conditionId: params.conditionId }, "Relayer redeem threw");
+    logger.error({ err, conditionId: params.conditionId }, "CTF redeemPositions threw");
     return false;
   }
 }

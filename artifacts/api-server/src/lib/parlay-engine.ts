@@ -313,19 +313,17 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
       })
       .where(eq(parlaysTable.id, parlayId));
 
-    // Fire-and-forget relayer call — failure is non-fatal (chain may settle on its own)
-    // Use conditionId from resolution (real hex conditionId), not leg.marketId (numeric event ID)
-    if (creds?.relayerApiKey && creds?.relayerKeyAddress && creds?.walletAddress && resolution.conditionId) {
+    // Fire-and-forget CTF on-chain redeem — failure is non-fatal (USDC already credited by chain)
+    // Uses privateKey to sign the Polygon tx; requires a small MATIC balance for gas (~0.01 per call)
+    if (creds?.privateKey && resolution.conditionId) {
       redeemWinningPosition({
         conditionId: resolution.conditionId,
-        funderAddress: creds.walletAddress,
-        relayerApiKey: creds.relayerApiKey,
-        relayerKeyAddress: creds.relayerKeyAddress,
+        privateKey: creds.privateKey,
       }).then(ok => {
-        if (!ok) logger.warn({ parlayId }, "Relayer redeem returned false — next leg will still be attempted after delay");
-      }).catch(err => logger.error({ err, parlayId }, "Relayer redeem threw unexpectedly"));
+        if (!ok) logger.warn({ parlayId }, "CTF redeemPositions returned false — USDC may still be available via manual claim");
+      }).catch(err => logger.error({ err, parlayId }, "CTF redeemPositions threw unexpectedly"));
     } else {
-      logger.warn({ parlayId }, "Relayer API key not configured — skipping redeem call, next leg proceeds after delay");
+      logger.warn({ parlayId }, "No privateKey configured — skipping on-chain redeem, next leg proceeds after delay");
     }
 
     logger.info({ parlayId, theoreticalPayout, proceedAt }, "Leg won (real mode) — redeem initiated, next leg scheduled");
