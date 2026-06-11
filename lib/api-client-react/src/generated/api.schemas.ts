@@ -5,6 +5,12 @@
  * 炜新联手征战世界杯 — 串关投注 API
  * OpenAPI spec version: 0.1.0
  */
+export interface WalletBalance {
+  /** USDC balance of the deposit wallet */
+  balanceUsdc: number | null;
+  walletAddress: string | null;
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -77,7 +83,7 @@ export interface SelectedOutcome {
   price: number;
   /** null until settled */
   won?: boolean | null;
-  /** Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. */
+  /** Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs. */
   ratio?: number | null;
 }
 
@@ -150,7 +156,6 @@ export interface Settings {
   hasApiKey: boolean;
   hasSecret: boolean;
   hasPassphrase: boolean;
-  hasPrivateKey: boolean;
 }
 
 export interface UpdateSettingsRequest {
@@ -161,8 +166,6 @@ export interface UpdateSettingsRequest {
   /** Polymarket L2 API passphrase */
   polymarketPassphrase?: string | null;
   walletAddress?: string | null;
-  /** Polygon L1 private key for order signing and POLY_ADDRESS header */
-  polymarketPrivateKey?: string | null;
 }
 
 export type GetMarketsParams = {

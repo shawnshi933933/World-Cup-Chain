@@ -29,7 +29,8 @@ import type {
   ParlayStats,
   ParlayWithLegs,
   Settings,
-  UpdateSettingsRequest
+  UpdateSettingsRequest,
+  WalletBalance
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -732,23 +733,34 @@ export const useStartParlay = <TError = ErrorType<unknown>,
     }
 
 export const getCloseParlayUrl = (parlayId: number,) => {
+
+
+
+
   return `/api/parlays/${parlayId}/close`
 }
 
 /**
- * @summary Manually close (cancel) an error or active parlay
+ * @summary Manually close an active or errored parlay
  */
 export const closeParlay = async (parlayId: number, options?: RequestInit): Promise<ParlayWithLegs> => {
+
   return customFetch<ParlayWithLegs>(getCloseParlayUrl(parlayId),
   {
     ...options,
     method: 'PATCH'
+
+
   }
 );}
+
+
+
 
 export const getCloseParlayMutationOptions = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext> => {
+
 const mutationKey = ['closeParlay'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
@@ -756,17 +768,28 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       : {...options, mutation: {...options.mutation, mutationKey}}
       : {mutation: { mutationKey, }, request: undefined};
 
+
+
+
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof closeParlay>>, {parlayId: number}> = (props) => {
           const {parlayId} = props ?? {};
-          return  closeParlay(parlayId, requestOptions)
+
+          return  closeParlay(parlayId,requestOptions)
         }
+
+
+
+
+
+
   return  { mutationFn, ...mutationOptions }}
 
     export type CloseParlayMutationResult = NonNullable<Awaited<ReturnType<typeof closeParlay>>>
+
     export type CloseParlayMutationError = ErrorType<unknown>
 
     /**
- * @summary Manually close (cancel) an error or active parlay
+ * @summary Manually close an active or errored parlay
  */
 export const useCloseParlay = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeParlay>>, TError,{parlayId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -778,6 +801,83 @@ export const useCloseParlay = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getCloseParlayMutationOptions(options));
     }
+
+export const getGetBalanceUrl = () => {
+
+
+
+
+  return `/api/balance`
+}
+
+/**
+ * @summary Get wallet USDC balance
+ */
+export const getBalance = async ( options?: RequestInit): Promise<WalletBalance> => {
+
+  return customFetch<WalletBalance>(getGetBalanceUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetBalanceQueryKey = () => {
+    return [
+    `/api/balance`
+    ] as const;
+    }
+
+
+export const getGetBalanceQueryOptions = <TData = Awaited<ReturnType<typeof getBalance>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getBalance>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetBalanceQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getBalance>>> = ({ signal }) => getBalance({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getBalance>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetBalanceQueryResult = NonNullable<Awaited<ReturnType<typeof getBalance>>>
+export type GetBalanceQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get wallet USDC balance
+ */
+
+export function useGetBalance<TData = Awaited<ReturnType<typeof getBalance>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getBalance>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetBalanceQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
 
 export const getGetSettingsUrl = () => {
 

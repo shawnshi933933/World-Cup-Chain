@@ -15,6 +15,6 @@ export interface SelectedOutcome {
   price: number;
   /** null until settled */
   won?: boolean | null;
-  /** Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. */
+  /** Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs. */
   ratio?: number | null;
 }

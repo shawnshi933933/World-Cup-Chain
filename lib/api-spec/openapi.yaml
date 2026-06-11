@@ -184,6 +184,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/ParlayWithLegs"
 
+  /parlays/{parlayId}/close:
+    patch:
+      operationId: closeParlay
+      tags: [parlays]
+      summary: Manually close an active or errored parlay
+      parameters:
+        - name: parlayId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Parlay closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParlayWithLegs"
+
+  /balance:
+    get:
+      operationId: getBalance
+      tags: [balance]
+      summary: Get wallet USDC balance
+      responses:
+        "200":
+          description: Wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalance"
+
   /settings:
     get:
       operationId: getSettings
@@ -216,6 +248,20 @@ paths:
 
 components:
   schemas:
+    WalletBalance:
+      type: object
+      properties:
+        balanceUsdc:
+          type: number
+          nullable: true
+          description: USDC balance of the deposit wallet
+        walletAddress:
+          type: string
+          nullable: true
+      required:
+        - balanceUsdc
+        - walletAddress
+
     HealthStatus:
       type: object
       properties:

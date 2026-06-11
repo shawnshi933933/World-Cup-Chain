@@ -82,7 +82,7 @@ export const GetParlaysResponseItem = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -110,14 +110,13 @@ export const CreateParlayBody = zod.object({
   "legs": zod.array(zod.object({
   "marketId": zod.string(),
   "marketTitle": zod.string(),
-  "marketEndDate": zod.coerce.date().optional().describe('Expected match end time — skip resolution polling before this'),
   "selectedOutcomes": zod.array(zod.object({
   "name": zod.string(),
   "tokenId": zod.string(),
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
   "won": zod.boolean().nullish().describe('null until settled'),
-  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs.')
 })).min(1).max(createParlayBodyLegsItemSelectedOutcomesMax)
 })).min(1)
 })
@@ -149,7 +148,7 @@ export const GetParlayResponse = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -171,7 +170,7 @@ export const GetParlayResponse = zod.object({
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
   "won": zod.boolean().nullish().describe('null until settled'),
-  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs.')
 })).describe('1 or 2 selected outcomes for this leg'),
   "stakeAmount": zod.number().optional().describe('Amount actually staked on this leg'),
   "payoutAmount": zod.number().nullish().describe('Actual payout received (null if not settled)'),
@@ -202,7 +201,7 @@ export const StartParlayResponse = zod.object({
   "name": zod.string(),
   "initialAmount": zod.number().describe('Initial stake in USDC'),
   "currentAmount": zod.number().describe('Current amount after each leg settles'),
-  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error', 'cancelled']),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
   "simulationMode": zod.boolean().describe('If true, no real money is used'),
   "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
   "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
@@ -224,7 +223,7 @@ export const StartParlayResponse = zod.object({
   "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
   "price": zod.number().describe('Price snapshot (0-1)'),
   "won": zod.boolean().nullish().describe('null until settled'),
-  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100)')
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs.')
 })).describe('1 or 2 selected outcomes for this leg'),
   "stakeAmount": zod.number().optional().describe('Amount actually staked on this leg'),
   "payoutAmount": zod.number().nullish().describe('Actual payout received (null if not settled)'),
@@ -236,10 +235,56 @@ export const StartParlayResponse = zod.object({
 
 
 /**
- * @summary Manually close (cancel) an error or active parlay
+ * @summary Manually close an active or errored parlay
  */
 export const CloseParlayParams = zod.object({
   "parlayId": zod.coerce.number()
+})
+
+export const CloseParlayResponse = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "initialAmount": zod.number().describe('Initial stake in USDC'),
+  "currentAmount": zod.number().describe('Current amount after each leg settles'),
+  "status": zod.enum(['draft', 'active', 'won', 'lost', 'error']),
+  "simulationMode": zod.boolean().describe('If true, no real money is used'),
+  "totalOdds": zod.number().describe('Combined multiplier across all legs (best case)'),
+  "totalOddsWorstCase": zod.number().optional().describe('Combined multiplier across all legs (worst case, when 2 outcomes selected)'),
+  "potentialPayout": zod.number().describe('Max potential final amount'),
+  "currentLegIndex": zod.number().describe('Which leg is currently active (0-indexed)'),
+  "totalLegs": zod.number(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+}).and(zod.object({
+  "legs": zod.array(zod.object({
+  "id": zod.number(),
+  "parlayId": zod.number(),
+  "legOrder": zod.number().describe('0-indexed order in the parlay chain'),
+  "marketId": zod.string(),
+  "marketTitle": zod.string(),
+  "selectedOutcomes": zod.array(zod.object({
+  "name": zod.string(),
+  "tokenId": zod.string(),
+  "odds": zod.number().describe('Odds snapshot at time of parlay creation'),
+  "price": zod.number().describe('Price snapshot (0-1)'),
+  "won": zod.boolean().nullish().describe('null until settled'),
+  "ratio": zod.number().nullish().describe('Percentage of stake allocated to this outcome (0-100). Only used when 2 outcomes selected per leg. Defaults to 100 for single-outcome legs.')
+})).describe('1 or 2 selected outcomes for this leg'),
+  "stakeAmount": zod.number().optional().describe('Amount actually staked on this leg'),
+  "payoutAmount": zod.number().nullish().describe('Actual payout received (null if not settled)'),
+  "status": zod.enum(['pending', 'active', 'won', 'lost']),
+  "settledAt": zod.coerce.date().nullish(),
+  "polymarketOrderId": zod.string().nullish().describe('Order ID on Polymarket (null in simulation mode)')
+}))
+}))
+
+
+/**
+ * @summary Get wallet USDC balance
+ */
+export const GetBalanceResponse = zod.object({
+  "balanceUsdc": zod.number().nullable().describe('USDC balance of the deposit wallet'),
+  "walletAddress": zod.string().nullable()
 })
 
 
@@ -252,8 +297,7 @@ export const GetSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean(),
-  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
+  "hasPassphrase": zod.boolean()
 })
 
 
@@ -265,9 +309,7 @@ export const UpdateSettingsBody = zod.object({
   "polymarketApiKey": zod.string().nullish(),
   "polymarketSecret": zod.string().nullish().describe('Polymarket L2 API secret for HMAC signing'),
   "polymarketPassphrase": zod.string().nullish().describe('Polymarket L2 API passphrase'),
-  "walletAddress": zod.string().nullish(),
-  "polymarketPrivateKey": zod.string().nullish().describe('Wallet private key for EIP-712 order signing'),
-  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
+  "walletAddress": zod.string().nullish()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -276,9 +318,7 @@ export const UpdateSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean(),
-  "hasPrivateKey": zod.boolean().optional(),
-  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
+  "hasPassphrase": zod.boolean()
 })
 
 

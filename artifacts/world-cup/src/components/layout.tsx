@@ -1,11 +1,12 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Trophy, Home, Search, List, Settings, Activity } from "lucide-react";
-import { useGetSettings } from "@workspace/api-client-react";
+import { Trophy, Home, Search, List, Settings, Activity, Wallet } from "lucide-react";
+import { useGetSettings, useGetBalance } from "@workspace/api-client-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { data: settings } = useGetSettings();
+  const { data: balanceData } = useGetBalance({ query: { refetchInterval: 30000 } });
 
   const navItems = [
     { href: "/", label: "总览", icon: Home },
@@ -48,6 +49,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </Link>
               );
             })}
+            {!settings?.simulationMode && (
+              <div className="flex items-center gap-1.5 text-sm font-mono font-bold text-accent border border-accent/30 bg-accent/10 rounded-full px-3 py-1">
+                <Wallet className="w-3.5 h-3.5" />
+                {balanceData?.balanceUsdc != null
+                  ? `$${balanceData.balanceUsdc.toFixed(2)}`
+                  : "—"}
+              </div>
+            )}
           </nav>
         </div>
       </header>

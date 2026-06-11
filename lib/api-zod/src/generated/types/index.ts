@@ -23,3 +23,4 @@ export * from './parlayWithLegs';
 export * from './selectedOutcome';
 export * from './settings';
 export * from './updateSettingsRequest';
+export * from './walletBalance';
