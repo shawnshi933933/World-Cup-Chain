@@ -297,57 +297,80 @@ export async function fetchFIFAFriendliesMarkets(
   }
 }
 
-export async function fetchMarketById(
-  conditionId: string
-): Promise<PolymarketMarket | null> {
+/**
+ * Check if any of our selected token outcomes have settled.
+ * Uses the parent event endpoint (/events/{eventId}) — works with the numeric
+ * event ID stored in leg.marketId (the /markets/{id} endpoint returns 404).
+ *
+ * Settlement is triggered by price threshold (default 0.98) so we don't have
+ * to wait for the formal `resolved` flag. Returns the conditionId of the
+ * settled child market so the relayer call gets the correct value.
+ */
+export async function checkMarketResolution(
+  eventId: string,
+  selectedTokenIds: string[],
+  priceThreshold = 0.98
+): Promise<{
+  resolved: boolean;
+  won: boolean;
+  winningTokenIds: string[];
+  conditionId?: string;
+}> {
+  const empty = { resolved: false, won: false, winningTokenIds: [], conditionId: undefined };
   try {
-    const res = await fetch(`${GAMMA_API}/markets/${conditionId}`, {
+    const res = await fetch(`${GAMMA_API}/events/${eventId}`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) return null;
-    const m = await res.json() as any;
+    if (!res.ok) {
+      logger.warn({ eventId, status: res.status }, "Event endpoint non-OK — skipping settlement check");
+      return empty;
+    }
+    const event = await res.json() as any;
+    const markets: any[] = event.markets || [];
 
-    // Legacy single-market parse (for settlement checks)
-    const outcomesRaw: string[] = m.outcomes ? JSON.parse(m.outcomes) : [];
-    const pricesRaw: string[] = m.outcomePrices ? JSON.parse(m.outcomePrices) : [];
-    const tokenIds: string[] = m.clobTokenIds ? JSON.parse(m.clobTokenIds) : [];
-    const outcomes: PolymarketOutcome[] = outcomesRaw.map((name, i) => ({
-      name,
-      price: parseFloat(pricesRaw[i] || "0"),
-      odds: priceToOdds(parseFloat(pricesRaw[i] || "0")),
-      tokenId: tokenIds[i] || "",
-    }));
+    let anyWon = false;
+    let anyLost = false;
+    const winningTokenIds: string[] = [];
+    let conditionId: string | undefined;
 
-    return {
-      id: m.conditionId || m.id,
-      slug: m.slug || "",
-      title: m.question || m.title || "",
-      category: "",
-      endDate: m.endDate || null,
-      active: m.active ?? true,
-      closed: m.closed ?? false,
-      resolved: m.resolved ?? false,
-      outcomes,
-    };
+    for (const market of markets) {
+      const tokenIds: string[] = market.clobTokenIds ? JSON.parse(market.clobTokenIds) : [];
+      const prices: string[] = market.outcomePrices ? JSON.parse(market.outcomePrices) : [];
+
+      for (let i = 0; i < tokenIds.length; i++) {
+        if (!selectedTokenIds.includes(tokenIds[i])) continue;
+
+        const price = parseFloat(prices[i] || "0");
+
+        if (price >= priceThreshold) {
+          anyWon = true;
+          winningTokenIds.push(tokenIds[i]);
+          conditionId = market.conditionId;
+        } else if (price <= 1 - priceThreshold) {
+          // Our token near zero — check if an opposing token in this market crossed the threshold
+          const opposingWon = prices.some(
+            (p, j) => !selectedTokenIds.includes(tokenIds[j]) && parseFloat(p) >= priceThreshold
+          );
+          if (opposingWon) anyLost = true;
+        }
+      }
+    }
+
+    if (anyWon) {
+      logger.info({ eventId, winningTokenIds: winningTokenIds.map(t => t.slice(0, 16)), conditionId }, "Settlement check: WON (price >= threshold)");
+      return { resolved: true, won: true, winningTokenIds, conditionId };
+    }
+    if (anyLost) {
+      logger.info({ eventId }, "Settlement check: LOST (opposing outcome price >= threshold)");
+      return { resolved: true, won: false, winningTokenIds: [], conditionId };
+    }
+
+    logger.debug({ eventId }, "Settlement check: not yet resolved");
+    return empty;
   } catch (err) {
-    logger.error({ err, conditionId }, "Failed to fetch single market");
-    return null;
-  }
-}
-
-export async function checkMarketResolution(
-  conditionId: string
-): Promise<{ resolved: boolean; winningOutcomes: string[] }> {
-  try {
-    const market = await fetchMarketById(conditionId);
-    if (!market) return { resolved: false, winningOutcomes: [] };
-    if (!market.resolved) return { resolved: false, winningOutcomes: [] };
-    const winning = market.outcomes.filter((o) => o.price >= 0.95).map((o) => o.name);
-    return { resolved: true, winningOutcomes: winning };
-  } catch (err) {
-    logger.error({ err }, "Failed to check market resolution");
-    return { resolved: false, winningOutcomes: [] };
+    logger.error({ err, eventId }, "Failed to check market resolution via event endpoint");
+    return empty;
   }
 }
 
