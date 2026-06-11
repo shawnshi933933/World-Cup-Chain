@@ -251,7 +251,8 @@ export const GetSettingsResponse = zod.object({
   "walletAddress": zod.string().nullish(),
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
-  "hasPassphrase": zod.boolean()
+  "hasPassphrase": zod.boolean(),
+  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
 })
 
 
@@ -264,7 +265,8 @@ export const UpdateSettingsBody = zod.object({
   "polymarketSecret": zod.string().nullish().describe('Polymarket L2 API secret for HMAC signing'),
   "polymarketPassphrase": zod.string().nullish().describe('Polymarket L2 API passphrase'),
   "walletAddress": zod.string().nullish(),
-  "polymarketPrivateKey": zod.string().nullish().describe('Wallet private key for EIP-712 order signing')
+  "polymarketPrivateKey": zod.string().nullish().describe('Wallet private key for EIP-712 order signing'),
+  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -274,7 +276,8 @@ export const UpdateSettingsResponse = zod.object({
   "hasApiKey": zod.boolean(),
   "hasSecret": zod.boolean(),
   "hasPassphrase": zod.boolean(),
-  "hasPrivateKey": zod.boolean().optional()
+  "hasPrivateKey": zod.boolean().optional(),
+  "minBetUsdc": zod.number().optional().describe('Minimum USDC amount to continue parlay after payout')
 })
 
 

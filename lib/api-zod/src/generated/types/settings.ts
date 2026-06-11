@@ -15,4 +15,6 @@ export interface Settings {
   hasSecret: boolean;
   hasPassphrase: boolean;
   hasPrivateKey: boolean;
+  /** Minimum USDC amount to continue parlay after payout */
+  minBetUsdc?: number;
 }

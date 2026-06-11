@@ -16,4 +16,6 @@ export interface UpdateSettingsRequest {
   walletAddress?: string | null;
   /** Polygon L1 private key for order signing and POLY_ADDRESS header */
   polymarketPrivateKey?: string | null;
+  /** Minimum USDC amount to continue parlay after payout */
+  minBetUsdc?: number;
 }

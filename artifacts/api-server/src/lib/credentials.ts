@@ -44,6 +44,13 @@ export async function resolvePolymarketCredentials(): Promise<PolymarketCredenti
   return null;
 }
 
+export async function resolveMinBetUsdc(): Promise<number> {
+  const envVal = process.env.MIN_BET_USDC;
+  if (envVal) return parseFloat(envVal) || 2;
+  const [settings] = await db.select().from(settingsTable).limit(1);
+  return parseFloat(settings?.minBetUsdc ?? "2") || 2;
+}
+
 export function envCredentialsConfigured(): boolean {
   return !!(
     process.env.POLYMARKET_API_KEY &&

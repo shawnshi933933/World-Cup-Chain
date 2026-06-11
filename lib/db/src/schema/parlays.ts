@@ -14,6 +14,8 @@ export const parlaysTable = pgTable("parlays", {
   potentialPayout: numeric("potential_payout", { precision: 18, scale: 6 }).notNull().default("0"),
   currentLegIndex: integer("current_leg_index").notNull().default(0),
   totalLegs: integer("total_legs").notNull().default(0),
+  balanceSnapshotUsdc: text("balance_snapshot_usdc"),
+  payoutWaitSince: timestamp("payout_wait_since", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

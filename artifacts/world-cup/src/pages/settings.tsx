@@ -23,6 +23,7 @@ const settingsSchema = z.object({
   polymarketPassphrase: z.string().optional(),
   walletAddress: z.string().optional(),
   polymarketPrivateKey: z.string().optional(),
+  minBetUsdc: z.number().min(0.5).max(1000).default(2),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
@@ -110,6 +111,7 @@ export default function SettingsPage() {
       polymarketPassphrase: "",
       walletAddress: "",
       polymarketPrivateKey: "",
+      minBetUsdc: 2,
     }
   });
 
@@ -122,12 +124,13 @@ export default function SettingsPage() {
         polymarketPassphrase: settings.hasPassphrase ? "••••••••" : "",
         walletAddress: settings.walletAddress || "",
         polymarketPrivateKey: settings.hasPrivateKey ? "••••••••" : "",
+        minBetUsdc: settings.minBetUsdc ?? 2,
       });
     }
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
-    const payload: SettingsFormValues = { simulationMode: data.simulationMode, walletAddress: data.walletAddress };
+    const payload: SettingsFormValues = { simulationMode: data.simulationMode, walletAddress: data.walletAddress, minBetUsdc: data.minBetUsdc };
     if (data.polymarketApiKey && !data.polymarketApiKey.startsWith("••••")) {
       payload.polymarketApiKey = data.polymarketApiKey;
     }
@@ -181,7 +184,7 @@ export default function SettingsPage() {
                 控制应用是使用真实资金还是模拟数据。
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <FormField
                 control={form.control}
                 name="simulationMode"
@@ -202,6 +205,34 @@ export default function SettingsPage() {
                         className={field.value ? "data-[state=checked]:bg-primary" : "data-[state=unchecked]:bg-destructive"}
                       />
                     </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="minBetUsdc"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-base font-bold">最低下注额 (USDC)</FormLabel>
+                    <FormDescription>
+                      上一腿结算后，到账金额至少达到此数值才会继续下一腿。低于此值视为到账失败，串关终止。
+                    </FormDescription>
+                    <FormControl>
+                      <div className="flex items-center gap-2 w-40">
+                        <span className="text-muted-foreground font-mono">$</span>
+                        <Input
+                          type="number"
+                          min={0.5}
+                          max={1000}
+                          step={0.5}
+                          className="bg-background font-mono"
+                          {...field}
+                          value={field.value ?? 2}
+                          onChange={e => field.onChange(parseFloat(e.target.value) || 2)}
+                        />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
                   </FormItem>
                 )}
               />

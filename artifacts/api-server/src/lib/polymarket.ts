@@ -421,6 +421,143 @@ export async function placePolymarketOrder(params: {
   }
 }
 
+const USDC_POLYGON_BRIDGED = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" as const;
+const USDC_POLYGON_NATIVE  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as const;
+const USDC_DECIMALS = 6;
+const ERC20_BALANCE_ABI = [{
+  inputs: [{ name: "account", type: "address" }],
+  name: "balanceOf",
+  outputs: [{ name: "", type: "uint256" }],
+  stateMutability: "view",
+  type: "function",
+}] as const;
+
+/** Read on-chain USDC balance of the deposit wallet (both bridged + native, sum). */
+export async function getWalletBalanceUsdc(walletAddress: string): Promise<number> {
+  try {
+    const { createPublicClient } = await import("viem");
+    const publicClient = createPublicClient({ chain: polygon, transport: http() });
+    const addr = walletAddress as `0x${string}`;
+    const [b1, b2] = await Promise.all([
+      publicClient.readContract({ address: USDC_POLYGON_BRIDGED, abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [addr] }).catch(() => 0n),
+      publicClient.readContract({ address: USDC_POLYGON_NATIVE,  abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [addr] }).catch(() => 0n),
+    ]);
+    const total = Number(b1 + b2) / 10 ** USDC_DECIMALS;
+    logger.debug({ walletAddress, total }, "Fetched on-chain USDC balance");
+    return total;
+  } catch (err) {
+    logger.warn({ err, walletAddress }, "Failed to fetch on-chain USDC balance");
+    return 0;
+  }
+}
+
+/** Check how many USDC-equivalent tokens have been matched for an order. Returns null if unavailable. */
+async function getOrderFilledUsdc(
+  orderId: string,
+  clob: ClobClient,
+  fallbackSizeUsdc: number
+): Promise<number | null> {
+  try {
+    const order = await (clob as any).getOrder(orderId) as any;
+    if (!order) return null;
+    const sizeMatched = parseFloat(order.size_matched ?? order.sizeMatched ?? order.matched ?? "0");
+    const price = parseFloat(order.price ?? "0");
+    if (price <= 0 || isNaN(sizeMatched)) return null;
+    return sizeMatched * price;
+  } catch (err) {
+    logger.warn({ err, orderId }, "Cannot check order fill status");
+    return null;
+  }
+}
+
+/**
+ * Place a GTC order and retry with top-up orders if not fully filled.
+ * Returns null on total failure, or { orderIds, totalFilledUsdc } on success.
+ * Uses up to maxRetries attempts with retryDelaySec between checks.
+ */
+export async function placePolymarketOrderWithRetry(params: {
+  tokenId: string;
+  price: number;
+  sizeUsdc: number;
+  apiKey: string | null | undefined;
+  secret: string | null | undefined;
+  passphrase: string | null | undefined;
+  walletAddress: string | null | undefined;
+  privateKey?: string | null | undefined;
+  maxRetries?: number;
+  retryDelaySec?: number;
+}): Promise<{ orderIds: string[]; totalFilledUsdc: number } | null> {
+  const maxRetries = params.maxRetries ?? 3;
+  const retryDelaySec = params.retryDelaySec ?? 20;
+
+  if (!params.privateKey || params.privateKey.startsWith("••••")) {
+    logger.error("placePolymarketOrderWithRetry: EOA private key required");
+    return null;
+  }
+
+  const pk = (params.privateKey.trim().startsWith("0x")
+    ? params.privateKey.trim()
+    : `0x${params.privateKey.trim()}`) as Hex;
+
+  let clob: ClobClient;
+  try {
+    const account = privateKeyToAccount(pk);
+    const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
+    clob = new ClobClient({
+      host: "https://clob.polymarket.com",
+      chain: 137,
+      signer: walletClient as any,
+      creds: { key: params.apiKey!, secret: params.secret!, passphrase: params.passphrase! },
+      signatureType: SignatureTypeV2.POLY_1271,
+      funderAddress: params.walletAddress!,
+    });
+  } catch (err) {
+    logger.error({ err }, "placePolymarketOrderWithRetry: failed to build ClobClient");
+    return null;
+  }
+
+  const orderIds: string[] = [];
+  let totalFilledUsdc = 0;
+  let remainingUsdc = params.sizeUsdc;
+
+  for (let attempt = 0; attempt < maxRetries && remainingUsdc >= 1; attempt++) {
+    if (attempt > 0) {
+      logger.info({ attempt, remainingUsdc }, `Top-up order attempt ${attempt + 1}/${maxRetries}`);
+    }
+
+    const result = await placePolymarketOrder({ ...params, sizeUsdc: remainingUsdc });
+    if (!result) {
+      logger.warn({ attempt, remainingUsdc }, "Order placement failed — stopping retry");
+      break;
+    }
+    orderIds.push(result.orderId);
+
+    if (attempt >= maxRetries - 1) {
+      totalFilledUsdc += remainingUsdc;
+      remainingUsdc = 0;
+      break;
+    }
+
+    await new Promise(r => setTimeout(r, retryDelaySec * 1000));
+
+    const filled = await getOrderFilledUsdc(result.orderId, clob, remainingUsdc);
+    if (filled === null) {
+      logger.warn({ orderId: result.orderId }, "Cannot check order fill — leaving GTC order on book, no further retry");
+      totalFilledUsdc += remainingUsdc;
+      remainingUsdc = 0;
+      break;
+    }
+
+    logger.info({ orderId: result.orderId, filled, intended: remainingUsdc }, "Order fill status");
+    totalFilledUsdc += filled;
+    remainingUsdc = params.sizeUsdc - totalFilledUsdc;
+  }
+
+  if (orderIds.length === 0) return null;
+  logger.info({ orderIds, totalFilledUsdc, originalSizeUsdc: params.sizeUsdc }, "Order(s) placed with retry");
+  return { orderIds, totalFilledUsdc };
+}
+
 export async function syncPolymarketBalance(params: {
   apiKey: string;
   secret: string;

@@ -29,6 +29,7 @@ function formatSettings(s: any) {
     walletAddress: envCreds
       ? process.env.POLYMARKET_WALLET ?? null
       : s.walletAddress ?? null,
+    minBetUsdc: parseFloat(s.minBetUsdc ?? "2") || 2,
   };
 }
 
@@ -73,6 +74,9 @@ router.put("/settings", async (req, res): Promise<void> => {
       if (parsed.data.polymarketPrivateKey !== undefined) {
         updates.polymarketPrivateKey = parsed.data.polymarketPrivateKey;
       }
+    }
+    if (parsed.data.minBetUsdc !== undefined) {
+      updates.minBetUsdc = String(parsed.data.minBetUsdc);
     }
 
     const { eq } = await import("drizzle-orm");
