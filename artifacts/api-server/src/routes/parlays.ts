@@ -108,13 +108,17 @@ router.post("/parlays", async (req, res): Promise<void> => {
 
   const { name, initialAmount, simulationMode, legs } = parsed.data;
 
-  // Real mode constraint: each leg must have exactly 1 outcome (a single executed order per leg)
+  // Real mode constraint: each leg must have 1 outcome, or 2 outcomes with ratios (split bet)
   if (!simulationMode) {
-    const multiOutcomeLeg = legs.find(leg => leg.selectedOutcomes.length > 1);
-    if (multiOutcomeLeg) {
+    const invalidLeg = legs.find(leg => {
+      if (leg.selectedOutcomes.length === 1) return false;
+      if (leg.selectedOutcomes.length === 2 && leg.selectedOutcomes.every((o: any) => o.ratio != null)) return false;
+      return true;
+    });
+    if (invalidLeg) {
       res.status(400).json({
-        error: "真实模式下每场比赛只能选择 1 个结果 (Real mode requires exactly 1 outcome per leg).",
-        marketTitle: multiOutcomeLeg.marketTitle,
+        error: "真实模式下每场比赛只能选择 1 个或 2 个结果（分注需设置比例）。",
+        marketTitle: invalidLeg.marketTitle,
       });
       return;
     }
