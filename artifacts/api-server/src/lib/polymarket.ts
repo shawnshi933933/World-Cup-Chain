@@ -47,7 +47,8 @@ async function getBestAskPrice(tokenId: string, fallbackPrice: number): Promise<
       logger.warn({ tokenId }, "No asks in orderbook — using fallback price");
       return fallbackPrice;
     }
-    const bestAsk = parseFloat(asks[0].price);
+    // Polymarket CLOB returns asks sorted descending (highest first) — find the minimum
+    const bestAsk = Math.min(...asks.map(a => parseFloat(a.price)).filter(p => p > 0 && p < 1));
     if (isNaN(bestAsk) || bestAsk <= 0 || bestAsk >= 1) return fallbackPrice;
     logger.debug({ tokenId, bestAsk }, "Fetched best ask from CLOB orderbook");
     return bestAsk;
