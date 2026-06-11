@@ -134,10 +134,11 @@ router.post("/parlays", async (req, res): Promise<void> => {
         totalOdds *= leg.selectedOutcomes[0].odds;
         totalOddsWorstCase *= leg.selectedOutcomes[0].odds;
       } else if (leg.selectedOutcomes.length === 2) {
-        const bestOdds = Math.max(...leg.selectedOutcomes.map(o => o.odds));
-        const worstOdds = Math.min(...leg.selectedOutcomes.map(o => o.odds));
-        totalOdds *= bestOdds;
-        totalOddsWorstCase *= worstOdds;
+        // Split bet: effective multiplier = (ratio/100) * odds for each outcome
+        const eff0 = (leg.selectedOutcomes[0].ratio / 100) * leg.selectedOutcomes[0].odds;
+        const eff1 = (leg.selectedOutcomes[1].ratio / 100) * leg.selectedOutcomes[1].odds;
+        totalOdds *= Math.max(eff0, eff1);
+        totalOddsWorstCase *= Math.min(eff0, eff1);
       }
     }
 
