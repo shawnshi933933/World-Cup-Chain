@@ -205,7 +205,9 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
     return;
   }
 
-  const resolution = await checkMarketResolution(leg.marketId);
+  const outcomes = leg.selectedOutcomes as SelectedOutcome[];
+  const selectedTokenIds = outcomes.map(o => o.tokenId);
+  const resolution = await checkMarketResolution(leg.marketId, selectedTokenIds);
 
   if (!resolution.resolved) {
     // Reset confirmation count if it was previously incremented
@@ -234,12 +236,10 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   // Double-confirmed — proceed with settlement
   logger.info({ parlayId, legOrder: leg.legOrder }, "Market resolution double-confirmed — settling leg");
 
-  const outcomes = leg.selectedOutcomes as SelectedOutcome[];
-  const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
-
-  const wonOutcome: SelectedOutcome | undefined = outcomes.find(o =>
-    winningOutcomeNames.some(w => w.includes(o.name.toLowerCase()) || o.name.toLowerCase().includes(w))
-  );
+  // Match winning outcome by tokenId (reliable) instead of name string matching
+  const wonOutcome: SelectedOutcome | undefined = resolution.won
+    ? outcomes.find(o => resolution.winningTokenIds.includes(o.tokenId))
+    : undefined;
 
   const updatedOutcomes = outcomes.map(o => ({
     ...o,
@@ -261,9 +261,11 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   const ratio = (wonOutcome.ratio ?? 100) / 100;
   const rawPayout = stakeAmount * ratio * wonOutcome.odds;
 
+  // Apply 95% safety factor in real mode to absorb minor redemption/fill discrepancies
+  const safetyFactor = parlay.simulationMode ? 1.0 : 0.95;
   const theoreticalPayout = parlay.simulationMode
     ? Math.round(rawPayout * 1_000_000) / 1_000_000
-    : Math.round(Math.max(rawPayout - GAS_FEE_USDC, 0) * 1_000_000) / 1_000_000;
+    : Math.round(Math.max(rawPayout * safetyFactor - GAS_FEE_USDC, 0) * 1_000_000) / 1_000_000;
 
   await db.update(parlayLegsTable)
     .set({
@@ -312,9 +314,10 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
       .where(eq(parlaysTable.id, parlayId));
 
     // Fire-and-forget relayer call — failure is non-fatal (chain may settle on its own)
-    if (creds?.relayerApiKey && creds?.relayerKeyAddress && creds?.walletAddress) {
+    // Use conditionId from resolution (real hex conditionId), not leg.marketId (numeric event ID)
+    if (creds?.relayerApiKey && creds?.relayerKeyAddress && creds?.walletAddress && resolution.conditionId) {
       redeemWinningPosition({
-        conditionId: leg.marketId,
+        conditionId: resolution.conditionId,
         funderAddress: creds.walletAddress,
         relayerApiKey: creds.relayerApiKey,
         relayerKeyAddress: creds.relayerKeyAddress,

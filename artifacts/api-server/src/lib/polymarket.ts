@@ -297,6 +297,24 @@ export async function fetchFIFAFriendliesMarkets(
   }
 }
 
+/** Fetch a single market by its numeric event ID using the events endpoint. */
+export async function fetchMarketById(
+  eventId: string
+): Promise<PolymarketMarket | null> {
+  try {
+    const res = await fetch(`${GAMMA_API}/events/${eventId}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const event = await res.json() as any;
+    return parseMatchEvent(event);
+  } catch (err) {
+    logger.error({ err, eventId }, "Failed to fetch market by event ID");
+    return null;
+  }
+}
+
 /**
  * Check if any of our selected token outcomes have settled.
  * Uses the parent event endpoint (/events/{eventId}) — works with the numeric
