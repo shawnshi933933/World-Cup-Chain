@@ -478,9 +478,11 @@ export async function getWalletBalanceUsdc(params: {
     });
 
     const result = await clob.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }) as any;
-    const balance = parseFloat(result?.balance ?? result?.allowance ?? "0");
+    // CLOB API returns balance in micro-USDC (6 decimal places), e.g. 27922481 = $27.92
+    const raw = parseFloat(result?.balance ?? result?.allowance ?? "0");
+    const balance = isNaN(raw) ? 0 : raw / 1_000_000;
     logger.debug({ walletAddress: params.walletAddress, balance, raw: result }, "Fetched CLOB USDC balance");
-    return isNaN(balance) ? 0 : balance;
+    return balance;
   } catch (err) {
     logger.warn({ err, walletAddress: params.walletAddress }, "Failed to fetch CLOB USDC balance");
     return 0;
