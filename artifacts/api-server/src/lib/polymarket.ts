@@ -542,71 +542,42 @@ export async function placePolymarketOrderWithRetry(params: {
     return null;
   }
 
+  // GTC aggressive limit: best ask + 2 cents sweeps the book in one shot.
+  // Any unfilled remainder stays open on Polymarket (cancel manually if needed — should be rare).
+  const bestAsk = await getBestAskPrice(params.tokenId, params.price);
+  const aggressivePrice = Math.min(roundToTick(bestAsk + 0.02, tickSize), 0.99);
+  const sizeTokens = params.sizeUsdc / bestAsk;
+
+  logger.info(
+    { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, sizeTokens, bestAsk, aggressivePrice, negRisk, tickSize },
+    "Placing GTC aggressive order"
+  );
+
   const orderIds: string[] = [];
   let totalFilledUsdc = 0;
-  let remainingUsdc = params.sizeUsdc;
 
-  for (let attempt = 0; attempt < maxRetries && remainingUsdc >= 1; attempt++) {
-    if (attempt > 0) {
-      await new Promise(r => setTimeout(r, retryDelaySec * 1000));
-      logger.info({ attempt, remainingUsdc }, `GTC top-up attempt ${attempt + 1}/${maxRetries}`);
-    }
+  try {
+    const result = await clob.createAndPostOrder(
+      { tokenID: params.tokenId, price: aggressivePrice, size: sizeTokens, side: Side.BUY },
+      { tickSize: tickSize.toString(), negRisk },
+      OrderType.GTC,
+    ) as any;
 
-    // GTC aggressive limit: best ask + 2 cents, sweeps the book up to this price.
-    // Unfilled remainder stays as a maker order — we cancel it immediately after.
-    const bestAsk = await getBestAskPrice(params.tokenId, params.price);
-    const aggressivePrice = Math.min(roundToTick(bestAsk + 0.02, tickSize), 0.99);
-    const sizeTokens = remainingUsdc / bestAsk; // size based on best ask, not limit price
+    const orderId = result?.orderID || result?.orderId || result?.order?.id;
+    if (orderId) orderIds.push(orderId.toString());
+
+    // takingAmount = tokens received, makingAmount = USDC spent
+    const takingAmount = parseFloat(result?.takingAmount ?? "0");
+    const makingAmount = parseFloat(result?.makingAmount ?? "0");
+    totalFilledUsdc = makingAmount > 0 ? makingAmount : (takingAmount > 0 ? takingAmount * bestAsk : 0);
 
     logger.info(
-      { tokenId: params.tokenId, remainingUsdc, sizeTokens, bestAsk, aggressivePrice, negRisk, tickSize, attempt },
-      "Placing GTC aggressive order"
+      { orderId, takingAmount, makingAmount, totalFilledUsdc, status: result?.status },
+      "GTC aggressive order result"
     );
-
-    try {
-      const result = await clob.createAndPostOrder(
-        { tokenID: params.tokenId, price: aggressivePrice, size: sizeTokens, side: Side.BUY },
-        { tickSize: tickSize.toString(), negRisk },
-        OrderType.GTC,
-      ) as any;
-
-      const orderId = result?.orderID || result?.orderId || result?.order?.id;
-      if (orderId) orderIds.push(orderId.toString());
-
-      // Parse fill: takingAmount = tokens received, makingAmount = USDC spent
-      const takingAmount = parseFloat(result?.takingAmount ?? "0");
-      const makingAmount = parseFloat(result?.makingAmount ?? "0");
-      const filledUsdc = makingAmount > 0 ? makingAmount : (takingAmount > 0 ? takingAmount * bestAsk : 0);
-
-      logger.info(
-        { orderId, takingAmount, makingAmount, filledUsdc, remainingUsdc, status: result?.status },
-        "GTC aggressive order result"
-      );
-
-      // Cancel unfilled remainder so it doesn't linger on the book
-      if (orderId) {
-        try {
-          await clob.cancelOrder({ orderID: orderId });
-          logger.info({ orderId }, "Cancelled GTC order remainder");
-        } catch (cancelErr) {
-          // Already fully filled or cancel failed — not critical
-          logger.warn({ orderId, cancelErr }, "GTC cancel attempt failed (may already be fully filled)");
-        }
-      }
-
-      if (filledUsdc > 0) {
-        totalFilledUsdc += filledUsdc;
-        remainingUsdc -= filledUsdc;
-        if (remainingUsdc < 0.01) break;
-      } else {
-        // Nothing filled — orderbook empty or price mismatch; stop retrying
-        logger.warn({ tokenId: params.tokenId, attempt }, "GTC order filled nothing — stopping retries");
-        break;
-      }
-    } catch (err) {
-      logger.error({ err, attempt }, "GTC order placement error — stopping retries");
-      break;
-    }
+  } catch (err) {
+    logger.error({ err }, "GTC order placement error");
+    return null;
   }
 
   if (orderIds.length === 0 && totalFilledUsdc === 0) return null;
