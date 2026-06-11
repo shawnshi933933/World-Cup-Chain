@@ -110,6 +110,7 @@ export const CreateParlayBody = zod.object({
   "legs": zod.array(zod.object({
   "marketId": zod.string(),
   "marketTitle": zod.string(),
+  "marketEndDate": zod.coerce.date().optional().describe('Expected match end time — skip resolution polling before this'),
   "selectedOutcomes": zod.array(zod.object({
   "name": zod.string(),
   "tokenId": zod.string(),

@@ -96,7 +96,7 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
       const stake1 = netStake * (o1.ratio! / 100);
       const stake2 = netStake * (o2.ratio! / 100);
 
-      logger.info({ parlayId, stake1, stake2, ratio1: o1.ratio, ratio2: o2.ratio }, "Placing split orders with retry");
+      logger.info({ parlayId, stake1, stake2, ratio1: o1.ratio, ratio2: o2.ratio }, "Placing split IOC orders");
 
       const [r1, r2] = await Promise.all([
         placePolymarketOrderWithRetry({ tokenId: o1.tokenId, price: o1.price, sizeUsdc: stake1, ...creds }),
@@ -142,6 +142,17 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
         updatedAt: new Date(),
       })
       .where(eq(parlayLegsTable.id, leg.id));
+
+    // Snapshot balance immediately after all orders are placed.
+    // This is the correct baseline: USDC has already been deducted, so when the
+    // payout arrives later the delta accurately represents the winnings only.
+    if (creds.walletAddress) {
+      const balanceAfterOrders = await getWalletBalanceUsdc(creds.walletAddress);
+      await db.update(parlaysTable)
+        .set({ balanceSnapshotUsdc: balanceAfterOrders.toString(), updatedAt: new Date() })
+        .where(eq(parlaysTable.id, parlayId));
+      logger.info({ parlayId, balanceSnapshot: balanceAfterOrders }, "Balance snapshotted after order placement");
+    }
   }
 }
 
@@ -149,7 +160,7 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   const [parlay] = await db.select().from(parlaysTable).where(eq(parlaysTable.id, parlayId));
   if (!parlay || parlay.status !== "active") return;
 
-  // PHASE: Waiting for on-chain USDC payout to arrive after a win
+  // PHASE A: Waiting for on-chain USDC payout to arrive after a win
   if (!parlay.simulationMode && parlay.payoutWaitSince && parlay.balanceSnapshotUsdc) {
     const elapsed = Date.now() - parlay.payoutWaitSince.getTime();
     if (elapsed > PAYOUT_WAIT_TIMEOUT_MS) {
@@ -199,7 +210,7 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
     return;
   }
 
-  // PHASE: Normal settlement — check if current active leg's market has resolved
+  // PHASE B: Settlement check — look up active leg and check if market resolved
   const legs = await db
     .select()
     .from(parlayLegsTable)
@@ -209,8 +220,43 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
   if (legs.length === 0) return;
   const leg = legs[0];
 
+  // Skip until the match end time has passed — no point polling during the game
+  if (leg.marketEndDate && new Date() < leg.marketEndDate) {
+    logger.debug(
+      { parlayId, marketEndDate: leg.marketEndDate, legOrder: leg.legOrder },
+      "Match end time not reached — skipping settlement check"
+    );
+    return;
+  }
+
   const resolution = await checkMarketResolution(leg.marketId);
-  if (!resolution.resolved) return;
+
+  if (!resolution.resolved) {
+    // Reset confirmation count if it was previously incremented
+    if ((leg.resolvedConfirmCount ?? 0) > 0) {
+      await db.update(parlayLegsTable)
+        .set({ resolvedConfirmCount: 0, updatedAt: new Date() })
+        .where(eq(parlayLegsTable.id, leg.id));
+    }
+    return;
+  }
+
+  // Market shows resolved — require 2 consecutive confirmations before settling
+  // to guard against transient API glitches
+  const newConfirmCount = (leg.resolvedConfirmCount ?? 0) + 1;
+  if (newConfirmCount < 2) {
+    await db.update(parlayLegsTable)
+      .set({ resolvedConfirmCount: newConfirmCount, updatedAt: new Date() })
+      .where(eq(parlayLegsTable.id, leg.id));
+    logger.info(
+      { parlayId, legOrder: leg.legOrder, confirmCount: newConfirmCount },
+      "Market resolved — awaiting 2nd confirmation before settling"
+    );
+    return;
+  }
+
+  // Double-confirmed — proceed with settlement
+  logger.info({ parlayId, legOrder: leg.legOrder }, "Market resolution double-confirmed — settling leg");
 
   const outcomes = leg.selectedOutcomes as SelectedOutcome[];
   const winningOutcomeNames = resolution.winningOutcomes.map(n => n.toLowerCase());
@@ -275,20 +321,25 @@ export async function checkAndSettleActiveLeg(parlayId: number): Promise<void> {
       await executeNextLeg(parlayId);
     }
   } else {
-    const creds = await resolvePolymarketCredentials();
-    if (!creds?.walletAddress) {
-      logger.error({ parlayId }, "Cannot snapshot balance — no wallet address in credentials");
-      return;
+    // Real mode — balance was already snapshotted at order placement time.
+    // Just start the payout wait timer. If snapshot is missing (edge case: parlay
+    // started before this code was deployed), take a fallback snapshot now.
+    let extraUpdate: Record<string, any> = {};
+    if (!parlay.balanceSnapshotUsdc) {
+      const creds = await resolvePolymarketCredentials();
+      if (creds?.walletAddress) {
+        const balanceNow = await getWalletBalanceUsdc(creds.walletAddress);
+        extraUpdate.balanceSnapshotUsdc = balanceNow.toString();
+        logger.warn({ parlayId, balanceNow }, "Balance snapshot missing — taking fallback snapshot at win detection");
+      }
     }
-    const balanceNow = await getWalletBalanceUsdc(creds.walletAddress);
     await db.update(parlaysTable)
-      .set({
-        balanceSnapshotUsdc: balanceNow.toString(),
-        payoutWaitSince: new Date(),
-        updatedAt: new Date(),
-      })
+      .set({ payoutWaitSince: new Date(), updatedAt: new Date(), ...extraUpdate })
       .where(eq(parlaysTable.id, parlayId));
-    logger.info({ parlayId, balanceSnapshot: balanceNow }, "Leg won (real mode) — snapshotted balance, waiting for USDC payout");
+    logger.info(
+      { parlayId, balanceSnapshot: parlay.balanceSnapshotUsdc ?? extraUpdate.balanceSnapshotUsdc },
+      "Leg won (real mode) — waiting for USDC payout"
+    );
   }
 }
 

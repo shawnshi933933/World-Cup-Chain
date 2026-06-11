@@ -16,6 +16,10 @@ export const parlayLegsTable = pgTable("parlay_legs", {
   status: text("status").notNull().default("pending"), // pending | active | won | lost
   settledAt: timestamp("settled_at", { withTimezone: true }),
   polymarketOrderId: text("polymarket_order_id"),
+  // When the match is expected to end — skip resolution polling before this time
+  marketEndDate: timestamp("market_end_date", { withTimezone: true }),
+  // Consecutive "resolved=true" confirmations (settle only after reaching 2)
+  resolvedConfirmCount: integer("resolved_confirm_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

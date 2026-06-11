@@ -167,6 +167,7 @@ router.post("/parlays", async (req, res): Promise<void> => {
         marketTitle: leg.marketTitle,
         selectedOutcomes: leg.selectedOutcomes,
         status: "pending",
+        marketEndDate: leg.marketEndDate ? new Date(leg.marketEndDate) : null,
       });
     }
 

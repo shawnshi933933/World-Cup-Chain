@@ -1,1 +1,2 @@
 - [Polymarket order signing](polymarket-signing.md) — secret IS the L2 private key (base64); use signatureType=3 (POLY_1271); fetch tick_size+neg_risk from API before each order.
+- [Parlay order & settlement design](parlay-order-settlement.md) — IOC orders with best-ask fetch; snapshot after orders; skip polling before marketEndDate; double-confirm resolution.

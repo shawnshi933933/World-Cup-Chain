@@ -33,6 +33,30 @@ function roundToTick(price: number, tickSize: number): number {
   return Math.round(price * factor) / factor;
 }
 
+/** Fetch the current best ask price from the CLOB orderbook for a token. */
+async function getBestAskPrice(tokenId: string, fallbackPrice: number): Promise<number> {
+  try {
+    const res = await fetch(
+      `https://clob.polymarket.com/book?token_id=${tokenId}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return fallbackPrice;
+    const book = await res.json() as any;
+    const asks: Array<{ price: string; size: string }> = book.asks ?? [];
+    if (asks.length === 0) {
+      logger.warn({ tokenId }, "No asks in orderbook — using fallback price");
+      return fallbackPrice;
+    }
+    const bestAsk = parseFloat(asks[0].price);
+    if (isNaN(bestAsk) || bestAsk <= 0 || bestAsk >= 1) return fallbackPrice;
+    logger.debug({ tokenId, bestAsk }, "Fetched best ask from CLOB orderbook");
+    return bestAsk;
+  } catch (err) {
+    logger.warn({ err, tokenId }, "Failed to fetch orderbook best ask — using fallback price");
+    return fallbackPrice;
+  }
+}
+
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const POLYMARKET_WC_URL = "https://polymarket.com/sports/world-cup/games";
 const POLYMARKET_SOCCER_URL = "https://polymarket.com/sports/soccer/games";
@@ -333,8 +357,8 @@ export async function placePolymarketOrder(params: {
   apiKey: string | null | undefined;
   secret: string | null | undefined;
   passphrase: string | null | undefined;
-  walletAddress: string | null | undefined;  // funder/deposit wallet address
-  privateKey?: string | null | undefined;     // EOA private key (signs orders)
+  walletAddress: string | null | undefined;
+  privateKey?: string | null | undefined;
 }): Promise<{ orderId: string } | null> {
   if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
     logger.error("placePolymarketOrder: incomplete credentials");
@@ -376,7 +400,6 @@ export async function placePolymarketOrder(params: {
       funderAddress: params.walletAddress,
     });
 
-    // Fetch token info via SDK (falls back to manual HTTP if SDK fails)
     let tickSize = 0.01;
     let negRisk = false;
     try {
@@ -394,12 +417,11 @@ export async function placePolymarketOrder(params: {
     }
 
     const roundedPrice = roundToTick(params.price, tickSize);
-    // size in tokens = USDC budget / price per token
     const sizeTokens = params.sizeUsdc / roundedPrice;
 
     logger.info(
       { tokenId: params.tokenId, sizeUsdc: params.sizeUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, signer: account.address, funder: params.walletAddress },
-      "Placing Polymarket order via SDK (POLY_1271)"
+      "Placing Polymarket GTC order via SDK (POLY_1271)"
     );
 
     const result = await clob.createAndPostOrder(
@@ -413,7 +435,7 @@ export async function placePolymarketOrder(params: {
       logger.error({ result }, "Polymarket SDK order: missing orderId in response");
       return null;
     }
-    logger.info({ orderId, status: result?.status }, "Polymarket order placed successfully");
+    logger.info({ orderId, status: result?.status }, "Polymarket GTC order placed successfully");
     return { orderId: orderId.toString() };
   } catch (err) {
     logger.error({ err }, "Failed to place Polymarket order via SDK");
@@ -451,33 +473,15 @@ export async function getWalletBalanceUsdc(walletAddress: string): Promise<numbe
   }
 }
 
-/** Check how many USDC-equivalent tokens have been matched for an order. Returns null if unavailable. */
-async function getOrderFilledUsdc(
-  orderId: string,
-  clob: ClobClient,
-  fallbackSizeUsdc: number
-): Promise<number | null> {
-  try {
-    const order = await (clob as any).getOrder(orderId) as any;
-    if (!order) return null;
-    const sizeMatched = parseFloat(order.size_matched ?? order.sizeMatched ?? order.matched ?? "0");
-    const price = parseFloat(order.price ?? "0");
-    if (price <= 0 || isNaN(sizeMatched)) return null;
-    return sizeMatched * price;
-  } catch (err) {
-    logger.warn({ err, orderId }, "Cannot check order fill status");
-    return null;
-  }
-}
-
 /**
- * Place a GTC order and retry with top-up orders if not fully filled.
- * Returns null on total failure, or { orderIds, totalFilledUsdc } on success.
- * Uses up to maxRetries attempts with retryDelaySec between checks.
+ * Place IOC (Immediate-Or-Cancel) orders, retrying top-up orders for any unfilled remainder.
+ * Each attempt: fetches current best ask from CLOB orderbook, places IOC at that price,
+ * reads fill amount directly from the response (no waiting needed).
+ * Returns null on total failure, or { orderIds, totalFilledUsdc } on any partial/full fill.
  */
 export async function placePolymarketOrderWithRetry(params: {
   tokenId: string;
-  price: number;
+  price: number;       // fallback price if orderbook fetch fails
   sizeUsdc: number;
   apiKey: string | null | undefined;
   secret: string | null | undefined;
@@ -488,8 +492,12 @@ export async function placePolymarketOrderWithRetry(params: {
   retryDelaySec?: number;
 }): Promise<{ orderIds: string[]; totalFilledUsdc: number } | null> {
   const maxRetries = params.maxRetries ?? 3;
-  const retryDelaySec = params.retryDelaySec ?? 20;
+  const retryDelaySec = params.retryDelaySec ?? 2;
 
+  if (!params.apiKey || !params.secret || !params.passphrase || !params.walletAddress) {
+    logger.error("placePolymarketOrderWithRetry: incomplete credentials");
+    return null;
+  }
   if (!params.privateKey || params.privateKey.startsWith("••••")) {
     logger.error("placePolymarketOrderWithRetry: EOA private key required");
     return null;
@@ -500,6 +508,9 @@ export async function placePolymarketOrderWithRetry(params: {
     : `0x${params.privateKey.trim()}`) as Hex;
 
   let clob: ClobClient;
+  let tickSize = 0.01;
+  let negRisk = false;
+
   try {
     const account = privateKeyToAccount(pk);
     const walletClient = createWalletClient({ account, chain: polygon, transport: http() });
@@ -511,6 +522,21 @@ export async function placePolymarketOrderWithRetry(params: {
       signatureType: SignatureTypeV2.POLY_1271,
       funderAddress: params.walletAddress!,
     });
+
+    // Fetch token info once — reused across all retry attempts
+    try {
+      const [tickData, negRiskData] = await Promise.all([
+        clob.getTickSize(params.tokenId) as Promise<any>,
+        clob.getNegRisk(params.tokenId) as Promise<any>,
+      ]);
+      tickSize = parseFloat(tickData?.minimum_tick_size ?? tickData?.tick_size ?? tickData ?? "0.01");
+      negRisk = typeof negRiskData === "boolean" ? negRiskData : !!(negRiskData?.neg_risk ?? negRiskData?.negRisk ?? false);
+      if (isNaN(tickSize) || tickSize <= 0) tickSize = 0.01;
+    } catch {
+      const fallback = await fetchTokenInfo(params.tokenId);
+      tickSize = fallback.tickSize;
+      negRisk = fallback.negRisk;
+    }
   } catch (err) {
     logger.error({ err }, "placePolymarketOrderWithRetry: failed to build ClobClient");
     return null;
@@ -522,39 +548,60 @@ export async function placePolymarketOrderWithRetry(params: {
 
   for (let attempt = 0; attempt < maxRetries && remainingUsdc >= 1; attempt++) {
     if (attempt > 0) {
-      logger.info({ attempt, remainingUsdc }, `Top-up order attempt ${attempt + 1}/${maxRetries}`);
+      await new Promise(r => setTimeout(r, retryDelaySec * 1000));
+      logger.info({ attempt, remainingUsdc }, `IOC top-up attempt ${attempt + 1}/${maxRetries}`);
     }
 
-    const result = await placePolymarketOrder({ ...params, sizeUsdc: remainingUsdc });
-    if (!result) {
-      logger.warn({ attempt, remainingUsdc }, "Order placement failed — stopping retry");
+    // Fetch current best ask fresh each attempt — orderbook may have changed
+    const bestAsk = await getBestAskPrice(params.tokenId, params.price);
+    const roundedPrice = roundToTick(bestAsk, tickSize);
+    const sizeTokens = remainingUsdc / roundedPrice;
+
+    logger.info(
+      { tokenId: params.tokenId, remainingUsdc, sizeTokens, price: roundedPrice, negRisk, tickSize, attempt },
+      "Placing IOC order"
+    );
+
+    try {
+      const result = await clob.createAndPostOrder(
+        { tokenID: params.tokenId, price: roundedPrice, size: sizeTokens, side: Side.BUY },
+        { tickSize: tickSize.toString(), negRisk },
+        OrderType.IOC,
+      ) as any;
+
+      const orderId = result?.orderID || result?.orderId || result?.order?.id;
+      if (orderId) orderIds.push(orderId.toString());
+
+      // IOC response includes fill info directly — no polling needed
+      const sizeMatched = parseFloat(
+        result?.size_matched ?? result?.sizeMatched ?? result?.matched ?? "0"
+      );
+      const filledUsdc = sizeMatched > 0 ? sizeMatched * roundedPrice : 0;
+
+      logger.info(
+        { orderId, sizeMatched, filledUsdc, remainingUsdc, status: result?.status },
+        "IOC order result"
+      );
+
+      if (filledUsdc > 0) {
+        totalFilledUsdc += filledUsdc;
+        remainingUsdc -= filledUsdc;
+      } else {
+        // Nothing filled — orderbook empty or price mismatch; stop retrying
+        logger.warn({ tokenId: params.tokenId, attempt }, "IOC order filled nothing — stopping retries");
+        break;
+      }
+    } catch (err) {
+      logger.error({ err, attempt }, "IOC order placement error — stopping retries");
       break;
     }
-    orderIds.push(result.orderId);
-
-    if (attempt >= maxRetries - 1) {
-      totalFilledUsdc += remainingUsdc;
-      remainingUsdc = 0;
-      break;
-    }
-
-    await new Promise(r => setTimeout(r, retryDelaySec * 1000));
-
-    const filled = await getOrderFilledUsdc(result.orderId, clob, remainingUsdc);
-    if (filled === null) {
-      logger.warn({ orderId: result.orderId }, "Cannot check order fill — leaving GTC order on book, no further retry");
-      totalFilledUsdc += remainingUsdc;
-      remainingUsdc = 0;
-      break;
-    }
-
-    logger.info({ orderId: result.orderId, filled, intended: remainingUsdc }, "Order fill status");
-    totalFilledUsdc += filled;
-    remainingUsdc = params.sizeUsdc - totalFilledUsdc;
   }
 
-  if (orderIds.length === 0) return null;
-  logger.info({ orderIds, totalFilledUsdc, originalSizeUsdc: params.sizeUsdc }, "Order(s) placed with retry");
+  if (orderIds.length === 0 && totalFilledUsdc === 0) return null;
+  logger.info(
+    { orderIds, totalFilledUsdc, originalSizeUsdc: params.sizeUsdc },
+    "IOC order(s) complete"
+  );
   return { orderIds, totalFilledUsdc };
 }
 

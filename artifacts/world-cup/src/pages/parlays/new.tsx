@@ -17,6 +17,7 @@ import { Trash2, Plus, ArrowRight, Save, Calculator, List } from "lucide-react";
 interface DraftLeg {
   marketId: string;
   marketTitle: string;
+  marketEndDate?: string;
   selectedOutcomes: SelectedOutcome[];
   splitRatio: number; // 0-100, percentage for first outcome. Only used when 2 outcomes selected.
 }
@@ -72,6 +73,7 @@ export default function ParlayNew() {
     setLegs([...legs, {
       marketId: market.id,
       marketTitle: market.title,
+      marketEndDate: market.endDate ? new Date(market.endDate).toISOString() : undefined,
       selectedOutcomes: [],
       splitRatio: 50,
     }]);
@@ -127,6 +129,7 @@ export default function ParlayNew() {
         legs: legs.map(l => ({
           marketId: l.marketId,
           marketTitle: l.marketTitle,
+          marketEndDate: l.marketEndDate ? new Date(l.marketEndDate) : undefined,
           selectedOutcomes: l.selectedOutcomes.map((o, i) => ({
             ...o,
             ratio: l.selectedOutcomes.length === 2
