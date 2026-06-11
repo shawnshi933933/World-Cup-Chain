@@ -245,7 +245,7 @@ export default function ParlayDetail() {
                     <div>
                       <div className="text-xs text-muted-foreground">投注金额</div>
                       <div className="font-bold">
-                        {leg.stakeAmount ? `$${leg.stakeAmount.toFixed(2)}` : "-"}
+                        {leg.stakeAmount != null ? `$${leg.stakeAmount.toFixed(2)}` : "-"}
                       </div>
                     </div>
                     <div className="text-right">

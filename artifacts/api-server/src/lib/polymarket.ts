@@ -572,23 +572,25 @@ export async function placePolymarketOrderWithRetry(params: {
       const orderId = result?.orderID || result?.orderId || result?.order?.id;
       if (orderId) orderIds.push(orderId.toString());
 
-      // IOC response includes fill info directly — no polling needed
-      const sizeMatched = parseFloat(
-        result?.size_matched ?? result?.sizeMatched ?? result?.matched ?? "0"
-      );
-      const filledUsdc = sizeMatched > 0 ? sizeMatched * roundedPrice : 0;
+      // IOC response uses takingAmount (tokens received) + makingAmount (USDC spent).
+      // size_matched is only on OpenOrder/GTC responses, NOT on IOC createAndPostOrder.
+      const takingAmount = parseFloat(result?.takingAmount ?? "0");
+      const makingAmount = parseFloat(result?.makingAmount ?? "0");
+      // Prefer makingAmount (direct USDC); fall back to tokens × price
+      const filledUsdc = makingAmount > 0 ? makingAmount : (takingAmount > 0 ? takingAmount * roundedPrice : 0);
 
       logger.info(
-        { orderId, sizeMatched, filledUsdc, remainingUsdc, status: result?.status },
+        { orderId, takingAmount, makingAmount, filledUsdc, remainingUsdc, status: result?.status },
         "IOC order result"
       );
 
       if (filledUsdc > 0) {
         totalFilledUsdc += filledUsdc;
         remainingUsdc -= filledUsdc;
+        if (remainingUsdc < 0.01) break;
       } else {
         // Nothing filled — orderbook empty or price mismatch; stop retrying
-        logger.warn({ tokenId: params.tokenId, attempt }, "IOC order filled nothing — stopping retries");
+        logger.warn({ tokenId: params.tokenId, attempt, rawResult: result }, "IOC order filled nothing — stopping retries");
         break;
       }
     } catch (err) {
