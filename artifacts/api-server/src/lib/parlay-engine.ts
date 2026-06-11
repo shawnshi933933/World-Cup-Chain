@@ -143,15 +143,24 @@ export async function executeNextLeg(parlayId: number): Promise<void> {
       })
       .where(eq(parlayLegsTable.id, leg.id));
 
-    // Snapshot balance immediately after all orders are placed.
-    // This is the correct baseline: USDC has already been deducted, so when the
-    // payout arrives later the delta accurately represents the winnings only.
+    // Snapshot balance 10 minutes after order placement (fire-and-forget).
+    // Waiting ensures the CLOB balance has reflected the USDC deduction before we
+    // capture the baseline — so the delta when payout arrives is accurate.
     if (creds.walletAddress) {
-      const balanceAfterOrders = await getWalletBalanceUsdc(creds);
-      await db.update(parlaysTable)
-        .set({ balanceSnapshotUsdc: balanceAfterOrders.toString(), updatedAt: new Date() })
-        .where(eq(parlaysTable.id, parlayId));
-      logger.info({ parlayId, balanceSnapshot: balanceAfterOrders }, "Balance snapshotted after order placement");
+      const credsCopy = { ...creds };
+      const SNAPSHOT_DELAY_MS = 10 * 60 * 1000;
+      setTimeout(async () => {
+        try {
+          const balance = await getWalletBalanceUsdc(credsCopy);
+          await db.update(parlaysTable)
+            .set({ balanceSnapshotUsdc: balance.toString(), updatedAt: new Date() })
+            .where(eq(parlaysTable.id, parlayId));
+          logger.info({ parlayId, balanceSnapshot: balance }, "Balance snapshotted 10min after order placement");
+        } catch (err) {
+          logger.warn({ err, parlayId }, "Failed to take delayed balance snapshot — fallback will trigger at win detection");
+        }
+      }, SNAPSHOT_DELAY_MS);
+      logger.info({ parlayId, delayMs: SNAPSHOT_DELAY_MS }, "Balance snapshot scheduled for 10min after order placement");
     }
   }
 }
